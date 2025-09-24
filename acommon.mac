@@ -1,0 +1,88 @@
+; //////////////////////////////////////////////////////////////////////////////
+; Screen
+; //////////////////////////////////////////////////////////////////////////////
+
+C_SCRWID =: 100
+C_VADDR  =: 40000
+
+; //////////////////////////////////////////////////////////////////////////////
+; Memory
+; //////////////////////////////////////////////////////////////////////////////
+
+; 177662(W) palette vsync and screen buf
+; BT00PPPP00000000
+; B=0 - screen buf 5 (else 6), T=0 - vsync timer enabled, PPPP - palette num
+
+; 177716(W) RAM banks 
+; [xAAA1BBBxxxCCxDD]
+; AAA - RAM bank for 40000-100000, BBB - RAM bank for 100000-140000, CC, DD - allow ROM banks at 100000
+; 0->110, 1->000, 2->010, 3->011, 4->100, 5->001 (screen buf 0), 6->111 (screen buf 1), 7->101
+;                 xAAA1BBBxxxCCxDD
+C_RAM_BANKS11 =: ^B0000100000000000
+C_RAM_BANKS14 =: ^B0000110000000000
+C_RAM_BANKS15 =: ^B0000100100000000
+C_RAM_BANKS16 =: ^B0000111100000000
+C_RAM_BANKS45 =: ^B0100100100000000
+C_RAM_BANKS51 =: ^B0001100000000000
+C_RAM_BANKS54 =: ^B0001110000000000
+C_RAM_BANKS56 =: ^B0001111100000000
+
+C_RAM_0 =: ^B110
+C_RAM_1 =: ^B000
+C_RAM_2 =: ^B010
+C_RAM_3 =: ^B011
+C_RAM_4 =: ^B100
+C_RAM_5 =: ^B001
+C_RAM_6 =: ^B111
+C_RAM_7 =: ^B101
+
+; //////////////////////////////////////////////////////////////////////////////
+; Keys
+; //////////////////////////////////////////////////////////////////////////////
+
+; 177660 [00000000 KI000000]
+; I=0 interrupts enable, K=1 key was pressed
+
+C_KEY_1		=: 61
+C_KEY_2		=: 62
+C_KEY_3		=: 63
+C_KEY_4		=: 64
+C_KEY_UP	=: 32
+C_KEY_DOWN	=: 33
+C_KEY_LEFT	=: 10
+C_KEY_RIGHT	=: 31
+C_KEY_SPACE	=: 40
+
+; //////////////////////////////////////////////////////////////////////////////
+; VI53 in Menestrel
+; //////////////////////////////////////////////////////////////////////////////
+
+; 177714 (data inverted)
+; GA XX XX WR CS CS A1 A0 - XX XX XX XX XX XX XX XX
+;             D2 D1         C1 C0 L1 L0 M2 M1 M0 BC
+;  GA - gates open
+; ~CS - chip select (0-selected)
+; ~WR - write (0-write)
+; control word: L0=L1=1 - LSB mode
+;               C0,C1 - counter select 0..2
+;               M0,M1,M2 - mode select (usually mode 3)
+;               BC=0 - usual 16-bit (1 - binary coded decimal)
+C_VI53_1	=: ^B1000100000000000
+C_VI53_2	=: ^B1000010000000000
+C_VI53_12	=: ^B1000000000000000
+C_VI53_NONE	=: ^B1000110000000000
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; Gameplay
+; //////////////////////////////////////////////////////////////////////////////
+
+; bottom line + 1
+C_FIELD_BOTTOM	= 256.
+
+; game modes
+C_MODE_INIT	= 02.
+C_MODE_PREPARE	= 03.
+C_MODE_CRASH	= 06.
+C_MODE_LOST	= 07.
+C_MODE_OVER	= 08.

@@ -1,0 +1,1959 @@
+	.title	RIVER
+	.enabl	LC, AMA
+	.asect
+	.=1000
+
+@include acommon.mac
+
+Start:	mov	#1000, SP
+	mtps	#200
+	; TODO: backup ints
+	; set stop
+	mov	#Stop, @#4
+	mov	#200, @#6
+	; check for BK 0011(M)
+	clr	@#100					; use this addr as flag for BK 0010
+	cmpb	@#177717, #300
+	bne	10$
+	mov	#C_RAM_BANKS51, @#177716		; banks 5 1
+	clrb	@#177663				; vsync on, screen buf 5, palette 0
+	mov	#VsyInt, @#100
+	mov	#200, @#102
+	mov	#1200, TimerCycle
+	mov	#120, TimerLine
+10$:	; keyboard interrupts
+	mov	#KbdInt, @#60
+	clr	@#62
+	mov	#Kbd274, @#274
+	clr	@#276
+	bic	#^B01000000, @#177660			; allow keyboard interrupt
+	; set timer to screen refresh length
+TimerCycle =: .+2
+	mov	#740, @#177706
+	mov	#20, @#177712				; start timer, max speed
+
+Stop:	; stop key goes here
+	mov	#1000, SP
+	mov	#200, @#177716				; speaker DC to low (not high?)
+	; clear ram/screen
+	mov	#End, R0
+	mov	#100000-End/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	mov	#1330, @#177664				; roll screen to 0
+	; all is set then
+	mtps	#0
+
+	; wait a bit, then finish init
+	clr	R0
+	sob	R0, .
+	tst	@#177662				; read keyboard reg just in case
+	clr	KeyCur
+
+	; go to main game cycle
+	clr	CurrentMode
+	br	MainCycle
+
+Exit:	; exit to somewhere
+	; TODO: restore vals
+	halt
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Main
+; //////////////////////////////////////////////////////////////////////////////
+
+; main game cycle
+MainCycle:
+	call	VSyncWait			; vsync wait cycle
+	mov	CurrentMode, R0
+	asl	R0
+	call	@MainCycleTbl(R0)		; run procedures
+	br	MainCycle
+
+MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGame, MainGame, MainAfterCrash, MainLiveLost, MainGameOver
+
+
+; menu prepare
+MainMenuInit:
+	inc	CurrentMode
+	return
+
+
+; menu (wait key)
+MainMenu:
+	inc	CurrentMode
+	return
+
+
+; first stage - init
+MainInit:	
+	cmp	Score, HScore			; update hiscore?
+	ble	10$
+	mov	Score, Hscore
+10$:	clr	Score
+	mov	#9., Lives
+	mov	#1., Level
+	mov	#1., SLevel			; stored level (will continue from it after crash)
+	; reset random, 0x14, 0xA8
+        movb	#24, RandLo
+	movb	#250, RandHi
+	mov	RandLo, RansLo			; duplicate them -> 1
+	mov	RandLo, Rans0L			; duplicate them -> 2
+	;
+	call	PrepareVars			; game vars from live lost
+	call	ClearScreen
+	; go second stage
+	inc	CurrentMode
+	return
+
+
+; second stage - scroll field into view 
+MainScrollInto:
+	call	SetScroll
+	call	DrawFirstLine
+	call	DrawObjects			; draw block objects
+	call	Rotate				; one line of rotation
+        tst     ScrollY          		; are we at start?
+        bne     99$
+	inc	CurrentMode
+99$:	return
+
+
+; wait for game key press
+MainWaitGame:
+	clr	KeyCur
+	tst	KeyCur
+	beq	.-4
+	inc	CurrentMode
+	return
+
+
+; play cycle
+MainGame:
+	tst	KeyUp
+	beq	10$
+;	call	DrawFirstLine			; draw line first asap
+;	call	DRAPLA				; draw plane
+;	call	ROTATE				; one line of rotation
+;	call	SetScroll
+10$:	call	SetScroll
+	call	DrawFirstLine			; draw line first asap
+	call	DrawObjects			; draw block objects
+	call	ProcObjects			; process objects moving etc.
+	call	Rotate
+	call	PlaneKeys			; process plane keys
+	return
+
+
+; wait some after crash
+MainAfterCrash:
+	inc	PlaneStatus
+	cmp	PlaneStatus, #128.
+	blo	99$
+	inc	CurrentMode
+99$:	return
+
+
+; live lost - init last bridge variables or game over
+MainLiveLost:
+	dec	Lives
+	ble	90$	
+        mov	RANSLO, RANS0L			; restore random (both)
+        mov	RANSLO, RANDLO	
+	mov	SLEVEL, LEVEL			; restore level
+	call	PrepareVars			; game vars from live lost
+	call	ClearScreen
+	mov	#C_MODE_PREPARE, CurrentMode	; second stage again
+	return
+90$:	mov	#C_MODE_OVER, CurrentMode
+	return
+
+
+; game over wait for keypress and go to 1st level
+MainGameOver:
+	mov	KeyShi, R0
+	add	KeySpc, R0
+	beq	99$
+	clr	KeyShi
+	clr	KeySpc
+	movb	#C_MODE_INIT, CurrentMode
+99$:	return
+	
+
+; //////////////////////////////////////////////////////////////////////////////
+; // UTILS, DEBUG, ETC
+; //////////////////////////////////////////////////////////////////////////////
+
+; empty procedure
+RetAdr:	return
+
+
+; vsync for 0011M - just reset timer
+VsyInt:	mov	#20, @#177712
+	rti
+
+
+; keyboard simple
+Kbd274:
+KbdInt:	mov	@#177662, (PC)+
+KeyCur:	.word	0
+	rti
+
+
+; wait for vsync
+VsyncWait:
+	mov	#177710, R0
+TimerAvg =: .+2
+	add	(R0), #000000
+	asr	TimerAvg
+TimerLine =: .+2
+	cmp	#000100, (R0)
+	bne	.-4
+	inc	(PC)+
+FrameCount:	.word	0
+	return
+
+
+; clear vram
+ClearScreen:
+	mov	#C_VADDR, R0
+	clr	R1
+10$:	mov	R1, (R0)+
+	mov	R1, (R0)+
+	tst	R0
+	bpl	10$
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // GAEMPLAY
+; //////////////////////////////////////////////////////////////////////////////
+
+; game vars from live lost / new game
+PrepareVars:
+	; clear all blocks
+	mov     #Block0, R0
+        mov     #4.*9., R1		; 9x8 bytes
+        clr     (R0)+
+        sob     R1, .-2
+	; scrolls
+	mov 	#255., ScrollY
+	mov	#31., BlockY			; block line = last line
+	mov	#1., NeedLn			; need to draw first line
+	clr	BloCnt				; block counter = 0 (bridge)
+	mov	#14., NoMine			; blocks cnt to 100% make mine
+	; no island just in case (will be bridge anyway)
+	clr	wBlStart2
+	clr	wBlEnd2
+	; plane 
+	mov	#151.-32.*256., PlaneX
+	clr	PlaneDir
+	clr	PlaneStatus
+	call	PlaneVelReset
+	clr	MISSLX
+	clr	MISSLY
+	mov	#1., SCORED			; will draw score
+	return
+
+
+; set scroll screen 255..0
+SetScroll:
+	mov	ScrollY, R1
+	mov	R1, R0
+;	decb	R0
+	add	#1330, R0
+	mov	R0, @#177664
+;	; clear one line
+;	mov	R1, R0
+;	decb	R0
+;	asl	R0
+;	mov	LineAd(R0), R0
+;	mov	#8., R3
+;	clr	R2
+;10$:	mov	R2, (R0)+
+;	mov	R2, (R0)+
+;	mov	R2, (R0)+
+;	mov	R2, (R0)+
+;	sob	R3, 10$
+	; set first line addr
+	asl	R1
+	mov	LineAd(R1), ScrollVAddr
+	return
+
+
+; rotate one line
+Rotate:	tst	KeyDwn			; need to slow rotation?
+	beq	8$
+	bit	#1, FrameCount
+	beq	8$
+	return
+8$:	mov	#1., NeedLn		; need to draw first line
+	decb	ScrollY			; decrease scrollline (byte!)
+	dec	BlockY			; decrease blockline
+	blt	10$
+	return
+10$:	mov	#31., BlockY		; last block line
+	inc	BloCnt
+	cmp	BloCnt, #8.		; bridge flying by
+	bne	24$
+	mov	RanS0L, RanSLO		; now store this level random
+	mov	Level, SLevel		; and store level
+24$:	cmp	BloCnt, #16.
+	bge	30$
+	return
+30$:	; new level
+	mov	RanDLO, RanS0L		; 2-bytes random storing when bridge about to spawn
+	clr	BloCnt			; 0th block
+	inc	Level
+	cmp	Level, #48.		; level++ (max is 48.)
+	blos	99$
+	mov	#47., Level		; level switching 47/48
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Draw
+; //////////////////////////////////////////////////////////////////////////////
+
+; draw first line of screen and objects
+DrawFirstLine:	
+	tst	NeedLn				; check if we need to draw anything
+	bne	2$
+	return
+2$:	clr	NeedLn	
+	call    MakeBlock         		; try to make a new block
+	; draw normal banks and river
+	mov	#^B1010101010101010, R4		; color = green
+	tst	BloCnt				; need to draw road?
+	bne	10$
+	mov	BlockY, R4
+	asl	R4
+	mov	RoadCo(R4), R4			; get road color
+10$:	mov	ScrollVAddr, R5
+	; draw left bank (R4 - road color if needed)
+	movb	bBlEnd1, R3
+	mov	R3, R2	
+	mov	R4, (R5)+
+        sob	R3, .-2
+	; draw water
+	mov	#16., R3			; 16. - left bank - island = water width
+	sub	R2, R3				; we haven't subb :(
+	movb	bBlEnd2, R1
+	sub	R1, R3
+	mov	#^B0101010101010101, R4
+	mov	R4, (R5)+
+	sob	R3, .-2
+	; draw island half
+	tst	R1
+	beq	20$
+	mov	#^B1010101010101010, R4
+	mov	R4, (R5)+
+	sob	R1, .-2
+20$:	; need to mirror landscape
+	mov	R5, R4
+	mov	#16., R3
+	mov	-(R4), (R5)+
+	sob	R3, .-2
+	; draw house line
+	cmpb	Block0, #03.		; if it's a house in block 0
+	bne	40$
+	call	HouseLine
+40$:	cmpb	Block0, #04.		; if it's a mine in block 0
+	bne	MoveBlendSta
+	call	MineLine
+; move blocks end to start
+MoveBlendSta:	
+	add	wBlDiff1, wBlEnd1
+	add	wBlDiff2, wBlEnd2
+	return
+
+
+; draw house line
+HouseLine:
+	mov	BlockY, R1
+	cmp	R1, #25.		; house lines are 06.-25. inside block
+	bhi	99$
+	cmp	R1, #06.
+	blo	99$
+	sub	#06., R1		; R1 = line inside house
+	mov	ScrollVAddr, R5
+	mov	Block0+2, R0
+	asl	R0
+	add	R0, R5			; R5 = vaddr + house X
+	movb	Block0+1, R0		; R0 = direction
+	; drawing
+	asl	R0
+	mov	WSPRI3(R0), R0		; R0 = sprite addr
+	asl	R1			; R1 = line num * 8 (4-words)
+	asl	R1
+	asl	R1
+	add	R1, R0			; R0 = line addr inside house sprite
+	mov	(R0)+, (R5)+
+	mov	(R0)+, (R5)+
+	mov	(R0)+, (R5)+
+	mov	(R0)+, (R5)+
+99$:	return
+
+
+; draw mine line
+MineLine:
+	mov	BlockY, R1
+	cmp	R1, #20.		; mine lines are 12.-20. inside block
+	bhi	99$
+	cmp	R1, #12.
+	blo	99$
+	sub	#12., R1		; sprite line -> R1
+	mov	ScrollVAddr, R5
+	mov	Block0+2, R0		; X/8 coord
+	asl	R0
+	add	R0, R5			; vaddr+X -> R5
+	mov	#WCP50, R0
+	asl	R1
+	asl	R1			; sprite line * 3 (2-words)
+	add	R1, R0
+	mov	(R0)+, (R5)+
+	mov	(R0)+, (R5)+
+99$:	return
+	
+
+; draw all objects
+DrawObjects:
+	mov	#Block0, 10$+2
+	mov	#9., 20$+2
+10$:	mov	#000000, R0			; R0 = Block addr
+	movb	(R0), R1			; R1 = object ID
+	asl	R1
+	call	@DrawOL(R1)
+	add	#8., 10$+2
+20$:	dec	#000000
+	bne	10$
+	return
+
+; draw object proc table
+DrawOL:	.word	RetAdr, DrawExplo, RetAdr, RetAdr, RetAdr, DrawShip, DrawHeli, DrawBoat, RetAdr
+
+; draw object explosion proc table
+DexpOL:	.word	RetAdr, RetAdr, RetAdr, RetAdr, DrawMineExp, DrawShipExp, DrawHeliExp, RetAdr, RetAdr
+
+; (01) draw explosion
+; R0 - block addr
+DrawExplo:
+	movb	1(R0), R5
+	asl	R5
+	jmp	@DexpOL(R5)
+
+
+; explosion animation number (x2)
+;			0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+ExpAniNum:	.byte	0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 4
+ExpAniMine:	.word	WCP51, WCP52, WCPBLU
+ExpAniHeli:	.word	WSPL10, WSPL11, 0
+ExpAniShip:	.word	WSPL12, WSPL13, 0
+
+; (04) draw mine explosion
+; R0 - block addr
+DrawMineExp:
+	mov	2(R0), R1		; X coord
+	clr	R2
+	bisb	4(R0), R2		; Y line
+	movb	6(R0), R5
+	movb	ExpAniNum(R5), R5
+	mov	ExpAniMine(R5), R4
+	; get vaddr
+	mov	R2, R5
+	incb	R5			; (!) NEED THIS ???
+	asl	R5
+	mov	LineAd(R5), R5
+	asl	R1			; X * 2 (mine X already X*8)
+	add	R1, R5			; vaddr -> R5
+	; draw 2 words x 16 lines
+	mov	#9., R3
+	; check if block-0
+	cmp	R0, #Block0
+	bhi	10$
+	; block-0 must check for need to draw
+2$:	cmp	R2, ScrollY		; need to draw?
+	blt	3$
+	mov	(R4)+, (R5)+		; draw line
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-2, R5
+	inc	R2
+	sob	R3, 2$
+	return
+3$:	add	#4., R4			; next line
+	add	#C_SCRWID, R5
+	inc	R2
+	sob	R3, 2$
+	return
+10$:	; check if not last block
+	cmp	R0, #BLOCK8
+	bhis	20$
+	; blocks 1..7 are drawing fully
+12$:	mov	(R4)+, (R5)+		; draw line
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-2, R5
+	sob	R3, 12$
+	return
+20$:	; last block are not drawing fully sometimes
+	mov	ScrollY, R0
+	dec	R0
+30$:	cmp	R2, R0
+	bge	90$
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-2, R5
+	inc	R2
+	sob	R3, 30$
+90$:	return
+
+
+; (05) draw ship
+; R0 - block addr
+DrawShip:
+	mov	2(R0), R1			; X coord
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	; spr table addr
+	mov	#WSP50L, R4
+	tstb	1(R0)
+	beq	DrawShipUniv0
+	mov	#WSP51L, R4
+; R1 - X coord
+; R2 - Y line
+; R4 - spr table addr
+DrawShipUniv0:
+	; use preshift
+	mov	R1, R5
+	bic	#^B1111111111111000, R5		; X fine
+	asl	R5				; X fine * 2	
+	add	R5, R4
+	mov	(R4), R4
+; R4 - sprite addr
+DrawShipUniv1:
+	; vaddr
+	mov	R2, R5
+	asl	R5
+	mov	LineAd(R5), R5			; vaddr -> R5
+	asr	R1
+	asr	R1
+	asr	R1				; X coarse
+	asl	R1				; X coarse * 2
+	add	R1, R5				; add X/8 to vaddr
+	; draw 5 words x 8 lines
+	mov	#8., R3
+	; check if block-0
+	cmp	R0, #Block0
+	bhi	10$
+	; block-0 must check for need to draw
+2$:	cmp	R2, ScrollY			; need to draw?
+	blt	3$
+	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-8., R5
+	inc	R2
+	sob	R3, 2$
+	return
+3$:	add	#10., R4			; next line
+	add	#C_SCRWID, R5
+	inc	R2
+	sob	R3, 2$
+	return
+10$:	; check if not last block
+	cmp	R0, #Block8
+	bhis	20$
+	; blocks 1..7 are drawing fully
+12$:	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-8., R5
+	sob	R3, 12$
+	return
+20$:	; last block are not drawing fully sometimes
+	mov	ScrollY, R0
+	dec	R0
+30$:	cmp	R2, R0
+	bge	90$
+	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-8., R5
+	inc	R2
+	sob	R3, 30$
+90$:	return
+
+
+; (05) draw ship explosion
+; R0 - block addr
+DrawShipExp:
+	mov	2(R0), R1			; X coord
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	; get spr addr
+	movb	6(R0), R5			; explosion animation #
+	movb	ExpAniNum(R5), R5		; .. to word
+	mov	ExpAniShip(R5), R4		; .. to table addr
+	bne	DrawShipUniv0			; have preshift table
+	mov	#WCPBLU, R4			; just sprite
+	br	DrawShipUniv1
+
+
+; (06) draw helicopter
+; R0 - block addr
+DrawHeli:
+	mov	#10., HeliHeight		; usual helicopter (10. height)
+	mov	2(R0), R1			; X coord
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	; spr addr
+	clr	R4
+	bisb	6(R0), R4			; animation
+	asl	R4
+	bisb	1(R0), R4			; direction
+	asl	R4
+	mov	WSP60A(R4), R4			; get sprites tab adr -> R4
+; R1 - X coord
+; R2 - Y line
+; R4 - spr table addr
+DrawHeliUniv0:
+	; use preshift
+	mov	R1, R5
+	bic	#^B1111111111111000, R5		; X fine
+	asl	R5				; X fine * 2
+	add	R5, R4
+	mov	(R4), R4			; sprite adr with preshift -> R4
+; without preshift
+; R4 - sprite addr
+DrawHeliUniv1:
+	; vaddr
+	mov	R2, R5
+	asl	R5
+	mov	LineAd(R5), R5			; vaddr -> R5
+	asr	R1
+	asr	R1
+	asr	R1				; X coarse
+	asl	R1				; X coarse * 2
+	add	R1, R5				; add X/8 to vaddr
+	; draw 3 words x 10 lines
+HeliHeight =: .+2
+	mov	#10., R3
+	; check if block-0
+	cmp	R0, #Block0
+	bhi	10$
+	; block-0 must check for need to draw
+2$:	cmp	R2, ScrollY			; need to draw?
+	blt	3$
+	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-4, R5
+	inc	R2
+	sob	R3, 2$
+	return
+3$:	add	#6., R4				; next line
+	add	#C_SCRWID, R5
+	inc	R2
+	sob	R3, 2$
+	return
+10$:	; check if not last block
+	cmp	R0, #Block8
+	bhis	20$
+	; blocks 1..7 are drawing fully
+12$:	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-4, R5
+	sob	R3, 12$
+	return
+20$:	; last block are not drawing fully sometimes
+	mov	ScrollY, R0
+	dec	R0
+30$:	cmp	R2, R0
+	bge	90$
+	mov	(R4)+, (R5)+			; draw line
+	mov	(R4)+, (R5)+
+	mov	(R4)+, (R5)
+	add	#C_SCRWID-4, R5
+	inc	R2
+	sob	R3, 20$
+90$:	return
+
+
+; (06) draw helicopter explosion
+; R0 - block addr
+DrawHeliExp:
+	mov	2(R0), R1		; X coord
+	clr	R2
+	bisb	4(R0), R2		; Y line
+	; get spr addr
+	movb	6(R0), R5			; explosion animation #
+	movb	ExpAniNum(R5), R5		; .. to word
+	mov	ExpAniHeli(R5), R4		; .. to table addr
+	bne	DrawHeliUniv0			; have preshift table
+	mov	#WCPBLU, R4			; just sprite
+	br	DrawHeliUniv1
+
+
+; (07) draw boat
+; R0 - block addr
+DrawBoat:
+	mov	#6., HeliHeight			; boat height (will use helicopter draw routine)
+	mov	2(R0), R1			; X coord
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	; spr table addr
+	mov	#WSP70L, R4
+	tstb	1(R0)
+	beq	10$
+	mov	#WSP71L, R4
+10$:	jmp	DrawHeliUniv0
+
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Making blocks
+; //////////////////////////////////////////////////////////////////////////////
+
+	; a bit more ships
+MakEnL:	.word	MakeShip, MakeHeli, MakeBoat, MakeShip, MakeHeli, MakeBoat, MakeShip, MakeShip
+
+; check and make new block if needed
+MakeBlock:
+	cmp	BlockY, #31.			; do we need to create new block?
+	beq	10$				; bottom line of block - need to create it
+	return
+10$:	; move 8 blocks down
+	mov     #Block8, R4			; R4-src, R5-dst
+	mov	#Block9, R5
+	mov     #2.*8., R3			; (!) words / 2
+20$:	mov	-(R4), -(R5)
+	mov	-(R4), -(R5)
+	sob	R3, 20$	
+	; only ONE random for each block
+	call	Random	
+	; make a new block
+	tst	BloCnt				; is it a brodge?
+	bne	30$
+	; bridge block - new level
+	mov	#12.*400+200, wBlStart1		; bridge have fixed start/end bank dx
+	mov	#12.*400+200, wBlEnd1
+	movb	RandLo, R0			; store next block random bank size
+	bic	#^B1111111111110000, R0		; R0 = 0..15
+	movb	BanksRandom(R0), bBlNext	; make random by table 1..13
+	movb	#200, wBlNext			; 0.5 float part
+	clr	wBlDiff1			; no diffs at bridge
+	clr	wBlDiff2
+	; bridge object
+	mov	#Block0, R5
+	movb	#08., (R5)+			; 08. - bridge
+	clrb	(R5)+				; direction (doesn't matter)
+	mov	#12., (R5)+			; bridge X/8
+	mov	ScrollY, R0
+	sub	#24., R0
+	movb	R0, (R5)+			; bridge Y (line number)
+	clrb	(R5)+				; moving = 0
+	clrb	(R5)+				; animation counter
+	clrb	(R5)				; reserved = 0
+	return					; object is created
+30$:	; block before bridge
+	cmp	BloCnt, #15.
+	bne	40$
+	mov	wBlStart1, wBlEnd1		; create end from start of previous
+	mov	#12.*400+200, wBlStart1		; fixed start (next will be bridge)
+	clr	wBlStart2			; no island
+	clr	wBlEnd2
+	br	MakeObject			; make diff and object
+40$:	; straight section
+	bit	#1, Level
+	beq	50$
+	mov	#4.*400+200, wBlStart1
+	br	MakeObject
+50$:	; normal block
+	mov	wBlStart1, wBlEnd1		; connect river bank
+	mov	wBlStart2, wBlEnd2		; connect island
+	movb	#200, wBlEnd1
+	movb	#200, wBlEnd2
+	; do we need to change river bank?
+	bit	#1, BloCnt
+	beq	60$
+	mov	wBlNext, wBlStart1		; change to next random width	
+	movb	RandLo, R0
+	bic	#^B1111111111110000, R0
+	movb	BanksRandom(R0), bBlNext	; make next width by table 1..13
+	movb	#200, wBlNext			; 0.5 float part
+60$:	; island sizes
+	; block before before bridge - end island
+	cmp	BloCnt, #14.
+	bne	70$
+	clr	wBlStart2
+	br	MakeObject
+70$:	; block 1 - no island at all
+	cmp	BloCnt, #1
+	beq	MakeObject
+	; 'normal' blocks island
+	; finish island if next block width is not enough
+	cmpb	bBlNext, #10
+	blo	72$
+	clr	wBlStart2
+	br	MakeObject
+72$:	; test current width
+	movb	bBlStart1, R1
+	movb	bBlEnd1, R2
+	call	GetMax
+	cmp	R0, #8.
+	bhi	MakeObject	
+	mov	#8.*400+200, wBlStart2
+	sub	wBlStart1, wBlStart2
+	cmp	wBlStart2, #4.*400+200		; test for too wide island
+	blos	MakeObject
+	mov	#4.*400+200, wBlStart2
+
+; try to make object after all
+MakeObject:
+	; first make river banks diffs
+	mov	wBlStart1, R0
+	sub	wBlEnd1, R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0				; / 32.
+	mov	R0, wBlDiff1
+	mov	wBlStart2, R0
+	sub	wBlEnd2, R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0				; / 32.
+	mov	R0, wBlDiff2
+	; now making object
+	clr	Block0				; clear obj ID
+	; first block is always a house
+	cmp	BloCnt, #1
+	beq	MakeHouse
+	; we can't run for too long without mine
+	dec	NoMine
+	ble	MakeMine
+	; use level difficulty
+	mov	#64., R0
+	sub	Level, R0			; R0 = 0..64 max, 0..16 min
+	asl	R0				; R0 = 0..128 max, 0..32 min
+	cmpb	RandHi, R0
+	bhi	10$				; make enemy
+	; check both bit 6 to make mine
+	bitb	#^B01000000, RandLo
+	beq	MakeHouse
+	bit	#^B01000000, R0
+	beq	MakeHouse
+	; make mine after all
+	br	MakeMine
+10$:	; making enemy
+	movb	RandHi, R0
+	bic	#^B1111111111111000, R0
+	cmp	Level, #4.			; no boats until level 4
+	bhis	20$
+	bic	#^B1111111111111110, R0
+20$:	asl	R0
+	jmp	@MakEnL(R0)
+
+; making house
+MakeHouse:
+	mov	#Block0, R5
+	movb	#03., (R5)+			; 03. - house ID
+	movb	RANDLO, R0
+	bic	#^B1111111111111110, R0
+	movb	R0, (R5)+			; +01 - direction
+	; get X coord
+	; can we use island?
+	movb	bBlStart2, R1
+	movb	bBlEnd2, R2
+	call	GetMin
+	cmp	R0, #2				; must be 4*8 pix wide island
+	blo	20$
+	bitb	#4, RANDHI			; ~50% chance to put house in center
+	bne	20$
+	mov	#14., (R5)+			; house X in center
+	br	80$
+20$:	; use side placement
+	movb	bBlStart1, R1
+	movb	bBlEnd1, R2
+	call	GetMin
+	; don't place house at all
+	cmp	R0, #4				; small side place?
+	bhis	22$
+	clrb	-2(R5)				; clear object
+	return
+22$:	; R0 - width of bank in 8-pix
+	asr	R0
+	sub	#2, R0
+	bge	30$
+	clr	R0				; R0 - house X
+30$:	; maybe use other side?
+	bitb	#8., RandHi
+	bne	40$
+	mov	#28., R1
+	sub	R0, R1
+	mov	R1, R0
+40$:	mov	R0, (R5)+			; house X on left side
+80$:	clrb	(R5)+				; house Y (line number, not used)
+	clrb	(R5)+				; moving = 0
+	clrb	(R5)+				; animation counter
+	clrb	(R5)				; reserved = 0	
+	return
+
+; make mine
+MakeMine:
+	mov	#14., NoMine			; reset 'no mine' length
+	mov	#2., R5				; mine width in 8-pix
+	call	InWaterCoord			; X*8 -> R0
+	tst	R0				; can't place?
+	bne	10$
+	clr	Block0
+	return
+10$:	mov	#Block0, R5
+	movb	#04., (R5)+			; 04. - mine
+	clrb	(R5)+				; direction
+	mov	R0, (R5)+			; X coord
+	mov	ScrollY, R0
+	sub	#20., R0
+	movb	R0, (R5)+			; y line number
+	clrb	(R5)+				; moving = 0
+	clrb	(R5)+				; animation counter
+	clrb	(R5)				; reserved = 0	
+	return
+
+; descriptions: ID, 16.+(dy/2)
+ShipDescr:	.byte	05, 20.
+HeliDescr:	.byte	06, 21.
+BoatDescr:	.byte	07, 19.
+
+; making ship
+MakeShip:	
+	mov	#5., R5				; ship width = 5 (8-pix)
+	call	InWaterCoord			; X*8 -> R0
+	mov	#ShipDescr, R4
+; R0 - in water coords
+; R4 - obj descriptions table
+MakeShipUni:
+	tst	R0
+	bne	10$
+	clr	Block0
+	return
+10$:	mov	#Block0, R5
+	movb	(R4)+, (R5)+			; 05. - ship
+	clrb	(R5)				; direction = 0
+	bitb	#^B01000000, RandHi
+	beq	.+4
+	incb	(R5)				; direction = 1
+	inc	R5
+	asl	R0				; X*8
+	asl	R0
+	asl	R0
+	mov	R0, (R5)+			; X coord
+	mov	ScrollY, R0
+	movb	(R4)+, R1
+	sub	R1, R0				; = 16+(dy/2)
+	movb	R0, (R5)+			; y line number
+	movb	RandLo, R0
+	bic	#^B1111111111100000, R0		; 0..31
+	add	#40., R0			; some tuning to delay
+	movb	R0, (R5)+			; moving delay
+	clrb	(R5)+				; animation counter
+	clrb	(R5)				; reserved 
+	return
+
+; making helicopter
+MakeHeli:
+	mov	#3., R5				; helicopter width = 3 (8-pix)
+	call	InWaterCoord			; X*8 -> R0
+	mov	#HeliDescr, R4
+	br	MakeShipUni
+
+; making boat
+MakeBoat:
+	mov	#3., R5				; boat width = 3 (8-pix)	
+	clr	Block0
+	call	InWaterCoord			; X*8 -> R0
+	mov	#BoatDescr, R4
+	br	MakeShipUni
+
+
+; get 'in-water' X coord -> R0
+; R5 - object size in 8-pix (words)
+InWaterCoord:
+	; blocks 1 or 15. will use simplified random
+	mov	BloCnt, R0
+	cmp	R0, #15.			; block-15?
+	beq	4$
+	cmp	R0, #1.				; block-1?
+	beq	4$
+	bit	#1, Level			; straight?
+	beq	8$
+	; straight blocks - random by table 
+	movb	RandLO, R0
+	bic	#^B1111111111110000, R0
+	movb	RNDT1L(R0), R0
+	return	
+4$:	; 1 or 15 block
+	movb	RandLo, R0			; 0..255.
+	bic	#^B1111111111111001, R0
+	asr	R0				; 0..3
+	add	#12., R0
+	return
+8$:	; normal section - get water width
+	movb	bBlStart2, R1
+	movb	bBlEnd2, R2
+	call	GetMax
+	mov	#16., R4
+	sub	R0, R4
+	movb	bBlStart1, R1
+	movb	bBlEnd1, R2
+	call	GetMax
+	cmp	R0, #2.
+	bhis	20$
+	mov	#2., R0
+20$:						; water start -> R0
+	sub	R0, R4				; water width -> R4
+	; ship size = 5 (8-pix)
+	; heli size = 3
+	; mine size = 2
+	cmp	R4, R5				; can we place at all?
+	bhis	30$
+	; unable to place object
+	clr	R0
+	br	99$
+30$:	sub	R5, R4				; placeable max rel x -> R4 (0..14 best case)
+	asl	R4
+	mov	RNDT0L(R4), R2			; table addr -> R2
+	; random
+	movb	RANDHI, R1
+	bic	#^B1111111111111000, R1	; 0..7
+	; random from table
+	add	R1, R2
+	movb	(R2), R1			; table random (0..14 best case)
+	add	R1, R0
+	; need to mirror placement?
+	bit	#^B00100000, RANDHI
+	bne	99$
+	mov	#32., R1
+	sub	R0, R1
+	sub	R5, R1
+	mov	R1, R0
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Process objects
+; //////////////////////////////////////////////////////////////////////////////
+
+PROCOL:	.word	RetAdr, ProcExplo, RetAdr, RetAdr, RetAdr, ProcShip, ProcHeli, ProcBoat, RetAdr
+
+PRO000:	.word	0
+PRO003:	.word	0
+
+; process block objects
+ProcObjects:
+	mov	#Block0, 10$+2
+	mov	#9., 20$+2			; total blocks count on screen
+10$:	mov	#000000, R0
+	movb	(R0), R1
+	asl	R1
+	call	@ProcOL(R1)			; process movement and animation
+	add	#8., 10$+2
+20$:	dec	#000000
+	bne	10$
+	return
+
+; explosion debug
+;ProcMine:
+;	cmp	R0, #Block6
+;	bne	99$
+;	movb	(R0), R1
+;	movb	#1, (R0)
+;	movb	R1, 1(R0)
+;	clrb	6(R0)
+;99$:	return
+
+
+; (01) explosion processing
+; R0 - block addr
+ProcExplo:
+	incb	6(R0)
+	cmpb	6(R0), #31.		; max animation for explosion (0..31)
+	blos	90$
+	clrb	(R0)			; delete object
+90$:	return
+
+
+; (05) ship processing
+; R0 - block addr
+ProcShip:	
+	; usual ship (long)
+	mov	#10., ShipWidth			; ship width in bytes
+	mov	#1, R5				; ship speed (in pix)
+; entry for a boat (sort of a same thing)
+; R5 - speed
+ProcShipUni:
+	; are we moving already?
+	tstb	5(R0)
+	beq	10$
+	decb	5(R0)	
+	return
+10$:	; get next moving coord
+	tstb	1(R0)				; is it right direction?
+	bne	50$
+	; do we need to check? (next fine coord = 0 - check)
+	mov	2(R0), R1			; X
+	add	R5, R1
+	bit	#^B111, R1			; next X-fine is 0?
+	bne	20$				; no, move right
+	; else check
+ShipWidth =: .+2
+	mov	#10., R4 			; +5 words
+	call	CheckGreen
+	bcc	20$				; can move
+	incb	1(R0) 				; reverse direction to left
+	return
+20$:	add	R5, 2(R0)			; X = X + speed
+	return
+50$:	; moving left - do we need to check? (current fine coord =0 - check)
+	mov	2(R0), R1
+	bit	#^B111, R1			; current X-fine is 0?
+	bne	60$				; no, move left	
+	; else check left
+	mov	#-2, R4				; -1 word
+	call	CheckGreen			; check green
+	bcc	60$
+	clrb	1(R0)				; reverse direction to the right
+	return
+60$:	sub	R5, 2(R0)			; X = X - speed
+	return
+
+
+; (06) helicopter processing
+; R0 - block addr
+ProcHeli:
+	; are we moving already?
+	tstb	5(R0)
+	beq	10$
+	decb	5(R0)	
+	br	90$
+10$:	; get next moving coord
+	tstb	1(R0)				; test direction
+	bne	50$
+	; do we need to check? (7th fine coord - check)
+	mov	2(R0), R1			; X
+	inc	R1
+	bit	#^B111, R1			; next X-fine is 0?
+	bne	20$				; no, move right
+	; else check
+	mov	#6., R4 			; +3 words
+	call	CheckGreen			; check green
+	bcc	20$				; can move
+	incb	1(R0) 				; reverse direction to left
+	br	90$
+20$:	inc	2(R0)				; inc X
+	br	90$
+50$:	; moving left - do we need to check? (0th fine coord - check)
+	mov	2(R0), R1
+	bit	#^B111, R1			; current X-fine is 0?
+	bne	60$				; no, move left	
+	; else check left
+	mov	#-2, R4				; -1 word
+	call	CheckGreen			; check green
+	bcc	60$
+	clrb	1(R0)				; reverse direction to the right
+	br	90$
+60$:	dec	2(R0)				; dec X
+90$:	; animation 1<>0
+	movb	6(R0), R1
+	com	R1
+	bic	#^B1111111111111110, R1
+	movb	R1, 6(R0)
+	return
+
+
+; (07) boat processing
+; R0 - block addr
+ProcBoat:
+	; short ship (boat)
+	mov	#6., ShipWidth			; boat width in bytes
+	mov	#2, R5				; boat speed
+	br	ProcShipUni
+
+
+; check for river bank - green 8-pix color
+; R4 - offset by X from vaddr
+; TODO: store object's already computed vaddr instead of compute it again
+CheckGreen:	
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	asl	R2
+	mov	LineAd(R2), R2			; vaddr -> R2
+	mov	2(R0), R1			; X coord
+	asr	R1
+	asr	R1
+	asr	R1				; X coarse
+	asl	R1				; X coarse * 2
+	add	R1, R2				; add X/8 words to vaddr
+	add	R4, R2				; add to check right or left side
+	; TODO: don't need to check so much
+	mov	#8., R3
+10$:	cmp	#^B1010101010101010, (R2)	; check green color
+	beq	80$
+	add	#C_SCRWID, R2
+	sob	R3, 10$
+	tst	(PC)+				; it's no green there, C=0
+80$:	sec					; was green, C=1
+	return
+
+
+; process keypresses
+PlaneKeys:
+	; plane is crashing?
+	tst	PlaneStatus			; plane is crashing - don't process keys
+	bne	99$
+	; key shift - fire missile
+	tst	KeyShi
+	beq	20$
+	tst	MISSLX				; test for missile already present
+	bne	20$
+	; create missile
+	mov	PlaneX, R0			; PlaneX is float (!) [int][frac]
+	clrb	R0
+	swab	R0
+	add	#40., R0			; 32. left margin + 8. plane half-width
+	mov	R0, MisslX
+	mov	#40., MisslY
+	; firing sound
+	mov	#1., R0				; sound ID - fire
+;	mov	#C_CMD_SOUND, R5		; start sound command
+;	call	CMDEXE	
+20$:	; right
+	tst	KeyRht
+	beq	30$
+	mov	#2, PlaneDir			; moving right sprite
+	add	PlaneVel, PlaneX
+	cmp	PlaneX, #255.-16.*256.
+	blos	PlaneVelInc
+	mov	#255.-16.*256., PlaneX
+	br	PlaneVelInc
+30$:	; left
+	tst	KeyLft
+	beq	40$
+	mov	#1, PlaneDir
+	sub	PlaneVel, PlaneX
+	bcc	PlaneVelInc
+	clr	PlaneX
+	br	PlaneVelInc
+40$:	; no left or right - reset plane moving
+PlaneVelReset =: .
+	clr	PlaneDir
+	mov	#C_PLAVEL_MIN, PlaneVel
+	mov	#C_PLADVEL_MIN, PlaneDVel
+	return
+PlaneVelInc =: .
+	add	PlaneDVel, PlaneVel
+	cmp	PlaneVel, #3.*256.
+	blos	99$
+	mov	#3.*256., PlaneVel
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // UTILS
+; //////////////////////////////////////////////////////////////////////////////
+
+; minimal of R1,R2 -> R0
+GetMin:	cmp	R2, R1
+	blo	10$
+	mov	R1, R0
+	return
+10$:	mov	R2, R0
+	return
+
+; maximal of R1,R2 -> R0
+GetMax:	cmp	R2, R1
+	bhi	10$
+	mov	R1, R0
+	return
+10$:	mov	R2, R0
+	return
+
+RANS0L:	.byte	351			; 0xE9 for saving when new bridge coming up
+RANS0H:	.byte	352			; 0xEA
+RANSLO:	.byte	351			; for saving from RANS0L when new bridge is flying by
+RANSHI:	.byte	352
+RAND:
+RANDLO:	.byte	351
+RANDHI:	.byte	352
+Random:	movb	RANDHI, R0		; LDA	randomHi
+	aslb	R0			; ASL
+	aslb	R0			; ASL
+	aslb	R0			; ASL
+	movb	RANDHI, R1		; EOR	randomHi	
+	xor	R1, R0
+	aslb	R0			; ASL
+	rolb	RANDLO			; ROL	randomLo
+	rolb	RANDHI			; ROL	randomHi
+	return
+	; (Blaire: its' taken from Atari asm code)
+	; (JTZ: randomHi is very random, randomLo is NOT when more than one bit is used,
+	; because: randomLo[x+1] = randomLo[x]*2 + 0/1, but randomLo is used more often,
+	; randomHi only for new enemy and which. This could make the game a bit predictable.)
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // DATA 
+; //////////////////////////////////////////////////////////////////////////////
+
+KeyShi:		.word	0
+KeySpc:		.word	0
+KeyUp:		.word	0
+KeyDwn:		.word	0
+KeyRht:		.word	0
+KeyLft:		.word	0
+
+CurrentMode:	.byte	0
+Pause:		.byte	0
+
+TEMPR0:		.word	0
+TEMPR1:		.word	0
+TEMPR2:		.word	0
+TEMPR3:		.word	0
+TEMPR4:		.word	0
+TEMPR5:		.word	0
+
+LEVEL:		.word	0			; current level
+SLEVEL:		.word	0
+LIVES:		.word	0			; lives number (0..9)
+SCORE:		.word	0
+SCORED:		.word	0			; flag <>0 - draw score
+HSCORE:		.word	0
+
+C_PLAVEL_MIN	= 1*256.
+C_PLADVEL_MIN	= 18.
+
+PlaneX:		.word	0			; plane sprite X (float! 0-255 in h-byte, fractional in l-byte)
+PlaneY:		.word	0			; TODO: plane have different bounding box when turning
+PLANX1:		.word	0			; 'actual' plane 'bounding' box (without second Y)
+PLANX2:		.word	0			; because plane is starting from PLANEX+2
+
+PlaneDir:	.word	0			; plane is moving, 1-right, 2-left, 0-straight
+PlaneStatus:	.word	0			; plane status, 0 - normal, 1.. - exploding
+PlaneVel:	.word	0			; plane velocity (float)
+PlaneDVel:	.word	0			; plane velocity addition (float)
+
+MISSLX:		.word	0
+MISSLY:		.word	0
+
+ScrollY:	.word   0 	   		; scroll line number
+ScrollVAddr:	.word	0			; scroll line vaddr
+
+wBlNext:	.byte	0			; next block upper left bank width (float part)
+bBlNext:	.byte	0			; .. int part
+wBlStart1:	.byte	0			; current block upper left bank width (float part)
+bBlStart1:	.byte	0			; .. int part
+wBlEnd1:	.byte	0			; current block lower left bank width (float part)
+bBlEnd1:	.byte	0			; .. int part
+wBlStart2:	.byte	0			; current block island upper width (float part)
+bBlStart2:	.byte	0			; .. int part
+wBlEnd2:	.byte	0			; current block island lower width (float part)
+bBlEnd2:	.byte	0			; .. int part
+wBlDiff1:	.word	0			; (start1 - end1) / 32.
+wBlDiff2:	.word	0			; (start2 - end2) / 32.
+
+;BLNXT1:		.word	12.			; next block starting left bank width (in 8-pix)
+;BLSTA1:		.word	12.			; current block starting left bank width
+;BLEND1:		.word	12.			; current block ending left bank width
+;BLSTA2:		.word	0			; current island starting width
+;BLEND2:		.word	0			; current island ending width
+
+BLOCKY:		.word	31.			; current line number in block 0
+BLOCNT:		.word	0			; current block number (0..15, 0 is bridge)
+NEEDLN:		.word	1			; need to draw first line
+
+NoMine:		.word	14.			; max blocks to run until create mine
+
+
+; Y coord to vaddr
+LineAd:		.word	40000, 40100, 40200, 40300, 40400, 40500, 40600, 40700
+		.word	41000, 41100, 41200, 41300, 41400, 41500, 41600, 41700
+		.word	42000, 42100, 42200, 42300, 42400, 42500, 42600, 42700
+		.word	43000, 43100, 43200, 43300, 43400, 43500, 43600, 43700
+		.word	44000, 44100, 44200, 44300, 44400, 44500, 44600, 44700
+		.word	45000, 45100, 45200, 45300, 45400, 45500, 45600, 45700
+		.word	46000, 46100, 46200, 46300, 46400, 46500, 46600, 46700
+		.word	47000, 47100, 47200, 47300, 47400, 47500, 47600, 47700
+		.word	50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700
+		.word	51000, 51100, 51200, 51300, 51400, 51500, 51600, 51700
+		.word	52000, 52100, 52200, 52300, 52400, 52500, 52600, 52700
+		.word	53000, 53100, 53200, 53300, 53400, 53500, 53600, 53700
+		.word	54000, 54100, 54200, 54300, 54400, 54500, 54600, 54700
+		.word	55000, 55100, 55200, 55300, 55400, 55500, 55600, 55700
+		.word	56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700
+		.word	57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700
+		.word	60000, 60100, 60200, 60300, 60400, 60500, 60600, 60700
+		.word	61000, 61100, 61200, 61300, 61400, 61500, 61600, 61700
+		.word	62000, 62100, 62200, 62300, 62400, 62500, 62600, 62700
+		.word	63000, 63100, 63200, 63300, 63400, 63500, 63600, 63700
+		.word	64000, 64100, 64200, 64300, 64400, 64500, 64600, 64700
+		.word	65000, 65100, 65200, 65300, 65400, 65500, 65600, 65700
+		.word	66000, 66100, 66200, 66300, 66400, 66500, 66600, 66700
+		.word	67000, 67100, 67200, 67300, 67400, 67500, 67600, 67700
+		.word	70000, 70100, 70200, 70300, 70400, 70500, 70600, 70700
+		.word	71000, 71100, 71200, 71300, 71400, 71500, 71600, 71700
+		.word	72000, 72100, 72200, 72300, 72400, 72500, 72600, 72700
+		.word	73000, 73100, 73200, 73300, 73400, 73500, 73600, 73700
+		.word	74000, 74100, 74200, 74300, 74400, 74500, 74600, 74700
+		.word	75000, 75100, 75200, 75300, 75400, 75500, 75600, 75700
+		.word	76000, 76100, 76200, 76300, 76400, 76500, 76600, 76700
+		.word	77000, 77100, 77200, 77300, 77400, 77500, 77600, 77700
+
+
+; score add table
+SCOTBL:		.word	0, 0, 0, 0, 80., 30., 60., 100., 500.
+
+; blocks table (8 objects)
+; +00 object id (0-nothing, 1..2 - explosions, 3-house, 4-mine, 5-ship, 6-helicopter, 7-boat, 8-bridge)
+; +01 object direction (0 - moving left)
+; +02 (WORD) object x
+; +04 object y (line number 0..255)
+; +05 object is moving = 0 (if movable), >0 - time to move
+; +06 object animation counter
+; +07 state flags
+Block0: 	.blkb   8.
+Block1:		.blkb	8.
+Block2:		.blkb	8.
+Block3:		.blkb	8.
+Block4:		.blkb	8.
+Block5:		.blkb	8.
+Block6:		.blkb	8.
+Block7:		.blkb	8.
+Block8:		.blkb	8.
+Block9:
+	
+
+; tables for random placement of objects fine tuning
+RNDT0L:		.word	RNDT00, RNDT01, RNDT02, RNDT03, RNDT04, RNDT05, RNDT06
+		.word	RNDT07, RNDT08, RNDT09, RNDT10, RNDT11, RNDT12, RNDT13, RNDT14
+
+.radix 10
+RNDT00:		.byte	0,  0,  0,  0,  0,  0,  0,  0
+RNDT01:		.byte	0,  1,  0,  1,  0,  1,  0,  1
+RNDT02:		.byte	0,  1,  2,  0,  1,  2,  0,  1
+RNDT03:		.byte	0,  1,  3,  2,  0,  1,  3,  2
+RNDT04:		.byte	1,  2,  3,  4,  1,  2,  3,  0
+RNDT05:		.byte	1,  2,  5,  3,  0,  4,  2,  3
+RNDT06:		.byte	1,  3,  6,  0,  2,  4,  5,  3
+RNDT07:		.byte	1,  3,  5,  7,  2,  4,  6,  4
+RNDT08:		.byte	0,  2,  4,  6,  8,  6,  4,  2
+RNDT09:		.byte	1,  3,  5,  7,  8,  7,  3,  5
+RNDT10:		.byte	2,  4,  6,  8,  9,  6,  4,  2
+RNDT11:		.byte	1,  3,  5,  6,  9, 10,  5,  6
+RNDT12:		.byte	1,  4,  6,  9, 11,  7,  6,  3
+RNDT13:		.byte	2,  5,  7, 10, 12,  5,  6,  4
+RNDT14:		.byte	2,  4,  6,  8, 10, 12, 14,  7
+; 16 bytes for random coords in straight section (5..31) a bit aligned left because of ship size
+;                       0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+RNDT1L:		.byte	5,  6,  7, 10, 12, 14, 15, 17, 18, 20, 22, 23, 13, 14, 11, 16
+; 16 bytes for random of river banks width
+BanksRandom:	.byte	1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13,  2,  4,  6
+.radix 8
+
+; //////////////////////////////////////////////////////////////////////////////	
+; // GRAPHICS DATA
+
+; road colors
+ROADCO:	.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
+	.word	177777, 177777, 177777, 0, 0, 0, 0, 0, 0, 0, 0, ^B1010000010100000
+	.word	^B1010000010100000, 0, 0, 0, 0, 0, 0, 0, 0, 177777, 177777, 177777
+	.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
+
+; helicopter explosion
+WSPL10:	.word	WSP100, WSP101, WSP102, WSP103, WSP104, WSP105, WSP106, WSP107
+WSPL11:	.word	WSP110, WSP111, WSP112, WSP113, WSP114, WSP115, WSP116, WSP117
+
+WSP100:	.word	52525, 52525, 52525, 122525, 52525, 52525, 52525, 52645
+	.word	52525, 52645, 52525, 52525, 52525, 52532, 52525, 55125
+	.word	52525, 52525, 52525, 55125, 52525, 122525, 52525, 52525
+	.word	52525, 52645, 52525, 52525, 52525, 52525
+WSP101:	.word	52525, 52525, 52525, 112525, 52526, 52525, 52525, 53225
+	.word	52525, 53225, 52525, 52525, 52525, 52551, 52525, 64525
+	.word	52525, 52525, 52525, 64525, 52525, 112525, 52526, 52525
+	.word	52525, 53225, 52525, 52525, 52525, 52525
+WSP102:	.word	52525, 52525, 52525, 52525, 52532, 52525, 52525, 55125
+	.word	52525, 55125, 52525, 52525, 52525, 52645, 52525, 122525
+	.word	52525, 52525, 52525, 122525, 52525, 52525, 52532, 52525
+	.word	52525, 55125, 52525, 52525, 52525, 52525
+WSP103:	.word	52525, 52525, 52525, 52525, 52551, 52525, 52525, 64525
+	.word	52525, 64525, 52525, 52525, 52525, 53225, 52525, 112525
+	.word	52526, 52525, 52525, 112525, 52526, 52525, 52551, 52525
+	.word	52525, 64525, 52525, 52525, 52525, 52525
+WSP104:	.word	52525, 52525, 52525, 52525, 52645, 52525, 52525, 122525
+	.word	52525, 122525, 52525, 52525, 52525, 55125, 52525, 52525
+	.word	52532, 52525, 52525, 52525, 52532, 52525, 52645, 52525
+	.word	52525, 122525, 52525, 52525, 52525, 52525
+WSP105:	.word	52525, 52525, 52525, 52525, 53225, 52525, 52525, 112525
+	.word	52526, 112525, 52526, 52525, 52525, 64525, 52525, 52525
+	.word	52551, 52525, 52525, 52525, 52551, 52525, 53225, 52525
+	.word	52525, 112525, 52526, 52525, 52525, 52525
+WSP106:	.word	52525, 52525, 52525, 52525, 55125, 52525, 52525, 52525
+	.word	52532, 52525, 52532, 52525, 52525, 122525, 52525, 52525
+	.word	52645, 52525, 52525, 52525, 52645, 52525, 55125, 52525
+	.word	52525, 52525, 52532, 52525, 52525, 52525
+WSP107:	.word	52525, 52525, 52525, 52525, 64525, 52525, 52525, 52525
+	.word	52551, 52525, 52551, 52525, 52525, 112525, 52526, 52525
+	.word	53225, 52525, 52525, 52525, 53225, 52525, 64525, 52525
+	.word	52525, 52525, 52551, 52525, 52525, 52525
+WSP110:	.word	122525, 52525, 52525, 52525, 50125, 52525, 52532, 52525
+	.word	52525, 50125, 52525, 52525, 52525, 52645, 52525, 52405
+	.word	2525, 52525, 2525, 52525, 52525, 52525, 55125, 52525
+	.word	52532, 52532, 52525, 50125, 52525, 52525
+WSP111:	.word	112525, 52526, 52525, 52525, 40525, 52525, 52551, 52525
+	.word	52525, 40525, 52525, 52525, 52525, 53225, 52525, 52025
+	.word	12525, 52524, 12525, 52524, 52525, 52525, 64525, 52525
+	.word	52551, 52551, 52525, 40525, 52525, 52525
+WSP112:	.word	52525, 52532, 52525, 52525, 2525, 52525, 52645, 52525
+	.word	52525, 2525, 52525, 52525, 52525, 55125, 52525, 50125
+	.word	52525, 52520, 52525, 52520, 52525, 52525, 122525, 52525
+	.word	52645, 52645, 52525, 2525, 52525, 52525
+WSP113:	.word	52525, 52551, 52525, 52525, 12525, 52524, 53225, 52525
+	.word	52525, 12525, 52524, 52525, 52525, 64525, 52525, 40525
+	.word	52525, 52501, 52525, 52501, 52525, 52525, 112525, 52526
+	.word	53225, 53225, 52525, 12525, 52524, 52525
+WSP114:	.word	52525, 52645, 52525, 52525, 52525, 52520, 55125, 52525
+	.word	52525, 52525, 52520, 52525, 52525, 122525, 52525, 2525
+	.word	52525, 52405, 52525, 52405, 52525, 52525, 52525, 52532
+	.word	55125, 55125, 52525, 52525, 52520, 52525
+WSP115:	.word	52525, 53225, 52525, 52525, 52525, 52501, 64525, 52525
+	.word	52525, 52525, 52501, 52525, 52525, 112525, 52526, 12525
+	.word	52524, 52025, 52525, 52025, 52525, 52525, 52525, 52551
+	.word	64525, 64525, 52525, 52525, 52501, 52525
+WSP116:	.word	52525, 55125, 52525, 52525, 52525, 52405, 122525, 52525
+	.word	52525, 52525, 52405, 52525, 52525, 52525, 52532, 52525
+	.word	52520, 50125, 52525, 50125, 52525, 52525, 52525, 52645
+	.word	122525, 122525, 52525, 52525, 52405, 52525
+WSP117:	.word	52525, 64525, 52525, 52525, 52525, 52025, 112525, 52526
+	.word	52525, 52525, 52025, 52525, 52525, 52525, 52551, 52525
+	.word	52501, 40525, 52525, 40525, 52525, 52525, 52525, 53225
+	.word	112525, 112526, 52526, 52525, 52025, 52525
+
+; ship explosion
+WSPL12:	.word	WSP120, WSP121, WSP122, WSP123, WSP124, WSP125, WSP126, WSP127
+WSPL13:	.word	WSP130, WSP131, WSP132, WSP133, WSP134, WSP135, WSP136, WSP137
+
+WSP120:	.word	52525, 125125, 52525, 52525, 52525, 52525, 52525, 125125
+	.word	52525, 52525, 125125, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52652, 52525, 52525, 52525, 52652, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52652, 52525, 52525, 125125
+	.word	52525, 52525, 52525, 52525, 52525, 125125, 52525, 52525
+WSP121:	.word	52525, 124525, 52526, 52525, 52525, 52525, 52525, 124525
+	.word	52526, 52525, 124525, 52526, 52525, 52525, 52525, 52525
+	.word	52525, 53251, 52525, 52525, 52525, 53251, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 53251, 52525, 52525, 124525
+	.word	52526, 52525, 52525, 52525, 52525, 124525, 52526, 52525
+WSP122:	.word	52525, 122525, 52532, 52525, 52525, 52525, 52525, 122525
+	.word	52532, 52525, 122525, 52532, 52525, 52525, 52525, 52525
+	.word	52525, 55245, 52525, 52525, 52525, 55245, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 55245, 52525, 52525, 122525
+	.word	52532, 52525, 52525, 52525, 52525, 122525, 52532, 52525
+WSP123:	.word	52525, 112525, 52552, 52525, 52525, 52525, 52525, 112525
+	.word	52552, 52525, 112525, 52552, 52525, 52525, 52525, 52525
+	.word	52525, 65225, 52525, 52525, 52525, 65225, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 65225, 52525, 52525, 112525
+	.word	52552, 52525, 52525, 52525, 52525, 112525, 52552, 52525
+WSP124:	.word	52525, 52525, 52652, 52525, 52525, 52525, 52525, 52525
+	.word	52652, 52525, 52525, 52652, 52525, 52525, 52525, 52525
+	.word	52525, 125125, 52525, 52525, 52525, 125125, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 125125, 52525, 52525, 52525
+	.word	52652, 52525, 52525, 52525, 52525, 52525, 52652, 52525
+WSP125:	.word	52525, 52525, 53251, 52525, 52525, 52525, 52525, 52525
+	.word	53251, 52525, 52525, 53251, 52525, 52525, 52525, 52525
+	.word	52525, 124525, 52526, 52525, 52525, 124525, 52526, 52525
+	.word	52525, 52525, 52525, 52525, 124525, 52526, 52525, 52525
+	.word	53251, 52525, 52525, 52525, 52525, 52525, 53251, 52525
+WSP126:	.word	52525, 52525, 55245, 52525, 52525, 52525, 52525, 52525
+	.word	55245, 52525, 52525, 55245, 52525, 52525, 52525, 52525
+	.word	52525, 122525, 52532, 52525, 52525, 122525, 52532, 52525
+	.word	52525, 52525, 52525, 52525, 122525, 52532, 52525, 52525
+	.word	55245, 52525, 52525, 52525, 52525, 52525, 55245, 52525
+WSP127:	.word	52525, 52525, 65225, 52525, 52525, 52525, 52525, 52525
+	.word	65225, 52525, 52525, 65225, 52525, 52525, 52525, 52525
+	.word	52525, 112525, 52552, 52525, 52525, 112525, 52552, 52525
+	.word	52525, 52525, 52525, 52525, 112525, 52552, 52525, 52525
+	.word	65225, 52525, 52525, 52525, 52525, 52525, 65225, 52525
+WSP130:	.word	52525, 125125, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52400, 52525, 52652, 52525, 52525, 52525, 52525, 52525
+	.word	52400, 52525, 52525, 52525, 52525, 52525, 125125, 52525
+	.word	52525, 125, 52525, 52525, 125, 52525, 52525, 125
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52652, 52525
+WSP131:	.word	52525, 124525, 52526, 52525, 52525, 52525, 52525, 52525
+	.word	52001, 52525, 53251, 52525, 52525, 52525, 52525, 52525
+	.word	52001, 52525, 52525, 52525, 52525, 52525, 124525, 52526
+	.word	52525, 525, 52524, 52525, 525, 52524, 52525, 525
+	.word	52524, 52525, 52525, 52525, 52525, 52525, 53251, 52525
+WSP132:	.word	52525, 122525, 52532, 52525, 52525, 52525, 52525, 52525
+	.word	50005, 52525, 55245, 52525, 52525, 52525, 52525, 52525
+	.word	50005, 52525, 52525, 52525, 52525, 52525, 122525, 52532
+	.word	52525, 2525, 52520, 52525, 2525, 52520, 52525, 2525
+	.word	52520, 52525, 52525, 52525, 52525, 52525, 55245, 52525
+WSP133:	.word	52525, 112525, 52552, 52525, 52525, 52525, 52525, 52525
+	.word	40025, 52525, 65225, 52525, 52525, 52525, 52525, 52525
+	.word	40025, 52525, 52525, 52525, 52525, 52525, 112525, 52552
+	.word	52525, 12525, 52500, 52525, 12525, 52500, 52525, 12525
+	.word	52500, 52525, 52525, 52525, 52525, 52525, 65225, 52525
+WSP134:	.word	52525, 52525, 52652, 52525, 52525, 52525, 52525, 52525
+	.word	125, 52525, 125125, 52525, 52525, 52525, 52525, 52525
+	.word	125, 52525, 52525, 52525, 52525, 52525, 52525, 52652
+	.word	52525, 52525, 52400, 52525, 52525, 52400, 52525, 52525
+	.word	52400, 52525, 52525, 52525, 52525, 52525, 125125, 52525
+WSP135:	.word	52525, 52525, 53251, 52525, 52525, 52525, 52525, 52525
+	.word	525, 52524, 124525, 52526, 52525, 52525, 52525, 52525
+	.word	525, 52524, 52525, 52525, 52525, 52525, 52525, 53251
+	.word	52525, 52525, 52001, 52525, 52525, 52001, 52525, 52525
+	.word	52001, 52525, 52525, 52525, 52525, 52525, 124525, 52526
+WSP136:	.word	52525, 52525, 55245, 52525, 52525, 52525, 52525, 52525
+	.word	2525, 52520, 122525, 52532, 52525, 52525, 52525, 52525
+	.word	2525, 52520, 52525, 52525, 52525, 52525, 52525, 55245
+	.word	52525, 52525, 50005, 52525, 52525, 50005, 52525, 52525
+	.word	50005, 52525, 52525, 52525, 52525, 52525, 122525, 52532
+WSP137:	.word	52525, 52525, 65225, 52525, 52525, 52525, 52525, 52525
+	.word	12525, 52500, 112525, 52552, 52525, 52525, 52525, 52525
+	.word	12525, 52500, 52525, 52525, 52525, 52525, 52525, 65225
+	.word	52525, 52525, 40025, 52525, 52525, 40025, 52525, 52525
+	.word	40025, 52525, 52525, 52525, 52525, 52525, 112525, 52552
+
+	
+; house 32 x 20 (4 words x 20 lines)
+WSPRI3:	.word	WCP30, WCP31
+WCP30:	.word	125252, 2, 124000, 125252, 1252, 0, 0, 125250
+	.word	2, 0, 0, 124000, 177776, 177777, 177777, 125777
+	.word	1776, 1774, 1774, 125774, 1776, 1774, 1774, 125774
+	.word	1776, 1774, 1774, 125774, 177776, 177777, 177777, 125777
+	.word	125252, 125252, 125252, 125252, 125252, 125252, 177652, 125252
+	.word	125252, 125252, 177652, 125252, 125252, 125252, 177652, 125252
+	.word	125252, 125252, 177777, 125377, 125252, 125252, 177777, 125377
+	.word	125252, 125252, 177777, 125377, 125252, 177652, 177777, 177777
+	.word	125252, 177652, 177777, 177777, 125252, 125252, 177777, 125377
+	.word	125252, 125252, 252, 125252, 125252, 125252, 252, 125252
+WCP31:	.word	125252, 52, 100000, 125252, 25252, 0, 0, 125200
+	.word	52, 0, 0, 100000, 177752, 177777, 177777, 137777
+	.word	37752, 37700, 37700, 137700, 37752, 37700, 37700, 137700
+	.word	37752, 37700, 37700, 137700, 177752, 177777, 177777, 137777
+	.word	125252, 125252, 125252, 125252, 125252, 125377, 125252, 125252
+	.word	125252, 125377, 125252, 125252, 125252, 125377, 125252, 125252
+	.word	177652, 177777, 125252, 125252, 177652, 177777, 125252, 125252
+	.word	177652, 177777, 125252, 125252, 177777, 177777, 125377, 125252
+	.word	177777, 177777, 125377, 125252, 177652, 177777, 125252, 125252
+	.word	125252, 125000, 125252, 125252, 125252, 125000, 125252, 125252
+
+
+; mine 
+WCP50:	.word	12525, 52524, 12521, 42524, 405, 50100, 5, 50000
+	.word	7425, 52000, 7405, 50000, 5, 50000, 0, 0
+	.word	63145, 63146
+
+; mine explosion
+WCP51:	.word	122525, 52525, 52525, 52645, 52645, 52525, 52525, 52532
+	.word	55125, 52525, 52525, 52525, 52525, 52645, 52645, 52525
+	.word	52525, 64532
+WCP52:	.word	52525, 52525, 50125, 52525, 52525, 52645, 52405, 2525
+	.word	2525, 52525, 52525, 55125, 52532, 52532, 50125, 52525
+	.word	52525, 52405
+
+
+; just blue color ^_^
+WCPBLU:	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+	.word	52525, 52525, 52525, 52525, 52525, 52525, 52525, 52525
+
+
+; ship 40 x 8
+WSP50L:	.word	WSP500, WSP501, WSP502, WSP503, WSP504, WSP505, WSP506, WSP507
+WSP51L:	.word	WSP510, WSP511, WSP512, WSP513, WSP514, WSP515, WSP516, WSP517
+
+WSP500:	.word	52525, 125, 52525, 52525, 52525, 52525, 125, 52525
+	.word	52525, 52525, 52525, 0, 52525, 52525, 52525, 125
+	.word	0, 52400, 52525, 52525, 177775, 177777, 177777, 177777
+	.word	52525, 177775, 177777, 177777, 52777, 52525, 125251, 125252
+	.word	125252, 52525, 52525, 125125, 125252, 125252, 52525, 52525
+WSP501:	.word	52525, 525, 52524, 52525, 52525, 52525, 525, 52524
+	.word	52525, 52525, 52525, 1, 52524, 52525, 52525, 525
+	.word	0, 52000, 52525, 52525, 177765, 177777, 177777, 177777
+	.word	52527, 177765, 177777, 177777, 53777, 52525, 125245, 125252
+	.word	125252, 52526, 52525, 124525, 125252, 125252, 52526, 52525
+WSP502:	.word	52525, 2525, 52520, 52525, 52525, 52525, 2525, 52520
+	.word	52525, 52525, 52525, 5, 52520, 52525, 52525, 2525
+	.word	0, 50000, 52525, 52525, 177725, 177777, 177777, 177777
+	.word	52537, 177725, 177777, 177777, 57777, 52525, 125225, 125252
+	.word	125252, 52532, 52525, 122525, 125252, 125252, 52532, 52525
+WSP503:	.word	52525, 12525, 52500, 52525, 52525, 52525, 12525, 52500
+	.word	52525, 52525, 52525, 25, 52500, 52525, 52525, 12525
+	.word	0, 40000, 52525, 52525, 177525, 177777, 177777, 177777
+	.word	52577, 177525, 177777, 177777, 77777, 52525, 125125, 125252
+	.word	125252, 52552, 52525, 112525, 125252, 125252, 52552, 52525
+WSP504:	.word	52525, 52525, 52400, 52525, 52525, 52525, 52525, 52400
+	.word	52525, 52525, 52525, 125, 52400, 52525, 52525, 52525
+	.word	0, 0, 52525, 52525, 176525, 177777, 177777, 177777
+	.word	52777, 176525, 177777, 177777, 177777, 52525, 124525, 125252
+	.word	125252, 52652, 52525, 52525, 125252, 125252, 52652, 52525
+WSP505:	.word	52525, 52525, 52001, 52525, 52525, 52525, 52525, 52001
+	.word	52525, 52525, 52525, 525, 52000, 52525, 52525, 52525
+	.word	1, 0, 52524, 52525, 172525, 177777, 177777, 177777
+	.word	53777, 172525, 177777, 177777, 177777, 52527, 122525, 125252
+	.word	125252, 53252, 52525, 52525, 125251, 125252, 53252, 52525
+WSP506:	.word	52525, 52525, 50005, 52525, 52525, 52525, 52525, 50005
+	.word	52525, 52525, 52525, 2525, 50000, 52525, 52525, 52525
+	.word	5, 0, 52520, 52525, 152525, 177777, 177777, 177777
+	.word	57777, 152525, 177777, 177777, 177777, 52537, 112525, 125252
+	.word	125252, 55252, 52525, 52525, 125245, 125252, 55252, 52525
+WSP507:	.word	52525, 52525, 40025, 52525, 52525, 52525, 52525, 40025
+	.word	52525, 52525, 52525, 12525, 40000, 52525, 52525, 52525
+	.word	25, 0, 52500, 52525, 52525, 177777, 177777, 177777
+	.word	77777, 52525, 177777, 177777, 177777, 52577, 52525, 125252
+	.word	125252, 65252, 52525, 52525, 125225, 125252, 65252, 52525
+WSP510:	.word	52525, 52525, 52400, 52525, 52525, 52525, 52525, 52400
+	.word	52525, 52525, 52525, 52525, 0, 52525, 52525, 52525
+	.word	125, 0, 52400, 52525, 177777, 177777, 177777, 177777
+	.word	52525, 177525, 177777, 177777, 177777, 52525, 52525, 125252
+	.word	125252, 125252, 52525, 52525, 125252, 125252, 52652, 52525
+WSP511:	.word	52525, 52525, 52001, 52525, 52525, 52525, 52525, 52001
+	.word	52525, 52525, 52525, 52525, 1, 52524, 52525, 52525
+	.word	525, 0, 52000, 52525, 177775, 177777, 177777, 177777
+	.word	52527, 176525, 177777, 177777, 177777, 52527, 52525, 125251
+	.word	125252, 125252, 52526, 52525, 125251, 125252, 53252, 52525
+WSP512:	.word	52525, 52525, 50005, 52525, 52525, 52525, 52525, 50005
+	.word	52525, 52525, 52525, 52525, 5, 52520, 52525, 52525
+	.word	2525, 0, 50000, 52525, 177765, 177777, 177777, 177777
+	.word	52537, 172525, 177777, 177777, 177777, 52537, 52525, 125245
+	.word	125252, 125252, 52532, 52525, 125245, 125252, 55252, 52525
+WSP513:	.word	52525, 52525, 40025, 52525, 52525, 52525, 52525, 40025
+	.word	52525, 52525, 52525, 52525, 25, 52500, 52525, 52525
+	.word	12525, 0, 40000, 52525, 177725, 177777, 177777, 177777
+	.word	52577, 152525, 177777, 177777, 177777, 52577, 52525, 125225
+	.word	125252, 125252, 52552, 52525, 125225, 125252, 65252, 52525
+WSP514:	.word	52525, 52525, 125, 52525, 52525, 52525, 52525, 125
+	.word	52525, 52525, 52525, 52525, 125, 52400, 52525, 52525
+	.word	52525, 0, 0, 52525, 177525, 177777, 177777, 177777
+	.word	52777, 52525, 177777, 177777, 177777, 52777, 52525, 125125
+	.word	125252, 125252, 52652, 52525, 125125, 125252, 125252, 52525
+WSP515:	.word	52525, 52525, 525, 52524, 52525, 52525, 52525, 525
+	.word	52524, 52525, 52525, 52525, 525, 52000, 52525, 52525
+	.word	52525, 1, 0, 52524, 176525, 177777, 177777, 177777
+	.word	53777, 52525, 177775, 177777, 177777, 53777, 52525, 124525
+	.word	125252, 125252, 53252, 52525, 124525, 125252, 125252, 52526
+WSP516:	.word	52525, 52525, 2525, 52520, 52525, 52525, 52525, 2525
+	.word	52520, 52525, 52525, 52525, 2525, 50000, 52525, 52525
+	.word	52525, 5, 0, 52520, 172525, 177777, 177777, 177777
+	.word	57777, 52525, 177765, 177777, 177777, 57777, 52525, 122525
+	.word	125252, 125252, 55252, 52525, 122525, 125252, 125252, 52532
+WSP517:	.word	52525, 52525, 12525, 52500, 52525, 52525, 52525, 12525
+	.word	52500, 52525, 52525, 52525, 12525, 40000, 52525, 52525
+	.word	52525, 25, 0, 52500, 152525, 177777, 177777, 177777
+	.word	77777, 52525, 177725, 177777, 177777, 77777, 52525, 112525
+	.word	125252, 125252, 65252, 52525, 112525, 125252, 125252, 52552
+
+
+; helicopter 24 x 10
+; by animation number & direction (0-bit - direction, 1-bit - animation)
+WSP60A:	.word	WSP60L, WSP61L, WSP62L, WSP63L
+WSP60L:	.word	WSP600, WSP601, WSP602, WSP603, WSP604, WSP605, WSP606, WSP607
+WSP61L:	.word	WSP610, WSP611, WSP612, WSP613, WSP614, WSP615, WSP616, WSP617
+WSP62L:	.word	WSP620, WSP621, WSP622, WSP623, WSP624, WSP625, WSP626, WSP627
+WSP63L:	.word	WSP630, WSP631, WSP632, WSP633, WSP634, WSP635, WSP636, WSP637
+
+WSP600:	.word	122525, 52652, 52525, 52525, 125245, 52525, 52525, 52645
+	.word	52525, 52525, 50000, 52525, 2501, 4000, 52525, 211
+	.word	124000, 52525, 1, 0, 52525, 52501, 50000, 52525
+	.word	52525, 52405, 52525, 52525, 55252, 52525
+WSP601:	.word	112525, 53252, 52525, 52525, 125225, 52526, 52525, 53225
+	.word	52525, 52525, 40001, 52525, 12405, 20000, 52524, 1045
+	.word	120000, 52526, 5, 0, 52524, 52405, 40001, 52525
+	.word	52525, 52025, 52525, 52525, 65251, 52525
+WSP602:	.word	52525, 55252, 52525, 52525, 125125, 52532, 52525, 55125
+	.word	52525, 52525, 5, 52525, 52025, 100000, 52520, 4225
+	.word	100000, 52532, 25, 0, 52520, 52025, 5, 52525
+	.word	52525, 50125, 52525, 52525, 125245, 52525
+WSP603:	.word	52525, 65251, 52525, 52525, 124525, 52552, 52525, 64525
+	.word	52525, 52525, 25, 52524, 50125, 1, 52502, 21125
+	.word	0, 52552, 125, 0, 52500, 50125, 25, 52524
+	.word	52525, 40525, 52525, 52525, 125225, 52526
+WSP604:	.word	52525, 125245, 52525, 52525, 122525, 52652, 52525, 122525
+	.word	52525, 52525, 125, 52520, 40525, 5, 52410, 104525
+	.word	0, 52650, 525, 0, 52400, 40525, 125, 52520
+	.word	52525, 2525, 52525, 52525, 125125, 52532
+WSP605:	.word	52525, 125225, 52526, 52525, 112525, 53252, 52525, 112525
+	.word	52526, 52525, 525, 52500, 2525, 25, 52040, 22525
+	.word	2, 53240, 2525, 0, 52000, 2525, 525, 52500
+	.word	52525, 12525, 52524, 52525, 124525, 52552
+WSP606:	.word	52525, 125125, 52532, 52525, 52525, 55252, 52525, 52525
+	.word	52532, 52525, 2525, 52400, 12525, 124, 50200, 112525
+	.word	10, 55200, 12525, 0, 50000, 12525, 2524, 52400
+	.word	52525, 52525, 52520, 52525, 122525, 52652
+WSP607:	.word	52525, 124525, 52552, 52525, 52525, 65251, 52525, 52525
+	.word	52551, 52525, 12525, 52000, 52525, 520, 41000, 52525
+	.word	42, 65000, 52525, 0, 40000, 52525, 12520, 52000
+	.word	52525, 52525, 52501, 52525, 112525, 53252
+WSP610:	.word	125125, 52532, 52525, 55252, 52525, 52525, 55125, 52525
+	.word	52525, 5, 52525, 52525, 40, 2520, 52525, 52
+	.word	104000, 52525, 0, 0, 52525, 5, 2525, 52525
+	.word	50125, 52525, 52525, 125245, 52525, 52525
+WSP611:	.word	124525, 52552, 52525, 65251, 52525, 52525, 64525, 52525
+	.word	52525, 25, 52524, 52525, 201, 12500, 52524, 251
+	.word	20000, 52526, 1, 0, 52524, 25, 12524, 52524
+	.word	40525, 52525, 52525, 125225, 52526, 52525
+WSP612:	.word	122525, 52652, 52525, 125245, 52525, 52525, 122525, 52525
+	.word	52525, 125, 52520, 52525, 1005, 52400, 52520, 1245
+	.word	100000, 52530, 5, 0, 52520, 125, 52520, 52520
+	.word	2525, 52525, 52525, 125125, 52532, 52525
+WSP613:	.word	112525, 53252, 52525, 125225, 52526, 52525, 112525, 52526
+	.word	52525, 525, 52500, 52525, 4025, 52000, 52501, 5225
+	.word	0, 52542, 25, 0, 52500, 525, 52500, 52501
+	.word	12525, 52524, 52525, 124525, 52552, 52525
+WSP614:	.word	52525, 55252, 52525, 125125, 52532, 52525, 52525, 52532
+	.word	52525, 2525, 52400, 52525, 20125, 50000, 52405, 25125
+	.word	0, 52610, 125, 0, 52400, 2525, 52400, 52405
+	.word	52525, 52520, 52525, 122525, 52652, 52525
+WSP615:	.word	52525, 65251, 52525, 124525, 52552, 52525, 52525, 52551
+	.word	52525, 12525, 52000, 52525, 100525, 40000, 52025, 124525
+	.word	0, 53040, 525, 0, 52000, 12525, 52000, 52025
+	.word	52525, 52501, 52525, 112525, 53252, 52525
+WSP616:	.word	52525, 125245, 52525, 122525, 52652, 52525, 52525, 52645
+	.word	52525, 52525, 50000, 52525, 2525, 2, 50125, 122525
+	.word	2, 54200, 2525, 0, 50000, 52525, 50000, 50125
+	.word	52525, 52405, 52525, 52525, 55252, 52525
+WSP617:	.word	52525, 125225, 52526, 112525, 53252, 52525, 52525, 53225
+	.word	52525, 52525, 40001, 52525, 12525, 10, 40524, 112525
+	.word	12, 61000, 12525, 0, 40000, 52525, 40001, 40525
+	.word	52525, 52025, 52525, 52525, 65251, 52525
+WSP620:	.word	52525, 125245, 52525, 122525, 52652, 52525, 52525, 52645
+	.word	52525, 52525, 50000, 52525, 2541, 4000, 52525, 1
+	.word	124000, 52525, 41, 0, 52525, 52501, 50000, 52525
+	.word	52525, 52405, 52525, 52525, 55252, 52525
+WSP621:	.word	52525, 125225, 52526, 112525, 53252, 52525, 52525, 53225
+	.word	52525, 52525, 40001, 52525, 12605, 20000, 52524, 5
+	.word	120000, 52526, 205, 0, 52524, 52405, 40001, 52525
+	.word	52525, 52025, 52525, 52525, 65251, 52525
+WSP622:	.word	52525, 125125, 52532, 52525, 55252, 52525, 52525, 55125
+	.word	52525, 52525, 5, 52525, 53025, 100000, 52520, 25
+	.word	100000, 52532, 1025, 0, 52520, 52025, 5, 52525
+	.word	52525, 50125, 52525, 52525, 125245, 52525
+WSP623:	.word	52525, 124525, 52552, 52525, 65251, 52525, 52525, 64525
+	.word	52525, 52525, 25, 52524, 54125, 1, 52502, 125
+	.word	0, 52552, 4125, 0, 52500, 50125, 25, 52524
+	.word	52525, 40525, 52525, 52525, 125225, 52526
+WSP624:	.word	52525, 122525, 52652, 52525, 125245, 52525, 52525, 122525
+	.word	52525, 52525, 125, 52520, 60525, 5, 52410, 525
+	.word	0, 52650, 20525, 0, 52400, 40525, 125, 52520
+	.word	52525, 2525, 52525, 52525, 125125, 52532
+WSP625:	.word	52525, 112525, 53252, 52525, 125225, 52526, 52525, 112525
+	.word	52526, 52525, 525, 52500, 102525, 25, 52040, 2525
+	.word	0, 53240, 102525, 0, 52000, 2525, 525, 52500
+	.word	52525, 12525, 52524, 52525, 124525, 52552
+WSP626:	.word	52525, 52525, 55252, 52525, 125125, 52532, 52525, 52525
+	.word	52532, 52525, 2525, 52400, 12525, 126, 50200, 12525
+	.word	0, 55200, 12525, 2, 50000, 12525, 2524, 52400
+	.word	52525, 52525, 52520, 52525, 122525, 52652
+WSP627:	.word	52525, 52525, 65251, 52525, 124525, 52552, 52525, 52525
+	.word	52551, 52525, 12525, 52000, 52525, 530, 41000, 52525
+	.word	0, 65000, 52525, 10, 40000, 52525, 12520, 52000
+	.word	52525, 52525, 52501, 52525, 112525, 53252
+WSP630:	.word	55252, 52525, 52525, 125125, 52532, 52525, 55125, 52525
+	.word	52525, 5, 52525, 52525, 40, 22520, 52525, 52
+	.word	0, 52525, 0, 20000, 52525, 5, 2525, 52525
+	.word	50125, 52525, 52525, 125245, 52525, 52525
+WSP631:	.word	65251, 52525, 52525, 124525, 52552, 52525, 64525, 52525
+	.word	52525, 25, 52524, 52525, 201, 112500, 52524, 251
+	.word	0, 52524, 1, 100000, 52524, 25, 12524, 52524
+	.word	40525, 52525, 52525, 125225, 52526, 52525
+WSP632:	.word	125245, 52525, 52525, 122525, 52652, 52525, 122525, 52525
+	.word	52525, 125, 52520, 52525, 1005, 52400, 52522, 1245
+	.word	0, 52520, 5, 0, 52522, 125, 52520, 52520
+	.word	2525, 52525, 52525, 125125, 52532, 52525
+WSP633:	.word	125225, 52526, 52525, 112525, 53252, 52525, 112525, 52526
+	.word	52525, 525, 52500, 52525, 4025, 52000, 52511, 5225
+	.word	0, 52500, 25, 0, 52510, 525, 52500, 52501
+	.word	12525, 52524, 52525, 124525, 52552, 52525
+WSP634:	.word	125125, 52532, 52525, 52525, 55252, 52525, 52525, 52532
+	.word	52525, 2525, 52400, 52525, 20125, 50000, 52445, 25125
+	.word	0, 52400, 125, 0, 52440, 2525, 52400, 52405
+	.word	52525, 52520, 52525, 122525, 52652, 52525
+WSP635:	.word	124525, 52552, 52525, 52525, 65251, 52525, 52525, 52551
+	.word	52525, 12525, 52000, 52525, 100525, 40000, 52225, 124525
+	.word	0, 52000, 525, 0, 52200, 12525, 52000, 52025
+	.word	52525, 52501, 52525, 112525, 53252, 52525
+WSP636:	.word	122525, 52652, 52525, 52525, 125245, 52525, 52525, 52645
+	.word	52525, 52525, 50000, 52525, 2525, 2, 51125, 122525
+	.word	2, 50000, 2525, 0, 51000, 52525, 50000, 50125
+	.word	52525, 52405, 52525, 52525, 55252, 52525
+WSP637:	.word	112525, 53252, 52525, 52525, 125225, 52526, 52525, 53225
+	.word	52525, 52525, 40001, 52525, 12525, 10, 44524, 112525
+	.word	12, 40000, 12525, 0, 44000, 52525, 40001, 40525
+	.word	52525, 52025, 52525, 52525, 65251, 52525
+
+
+; boat 24 x 6
+WSP70L:	.word	WSP700, WSP701, WSP702, WSP703, WSP704, WSP705, WSP706, WSP707
+WSP71L:	.word	WSP710, WSP711, WSP712, WSP713, WSP714, WSP715, WSP716, WSP717
+
+WSP700:	.word	40125, 52525, 52525, 25, 52520, 52525, 100005, 52002
+	.word	52525, 5, 0, 52525, 177765, 57777, 52525, 125225
+	.word	52652, 52525
+WSP701:	.word	525, 52525, 52525, 125, 52500, 52525, 25, 50012
+	.word	52525, 25, 0, 52524, 177725, 77777, 52525, 125125
+	.word	53252, 52525
+WSP702:	.word	2525, 52524, 52525, 525, 52400, 52525, 125, 40050
+	.word	52525, 125, 0, 52520, 177525, 177777, 52525, 124525
+	.word	55252, 52525
+WSP703:	.word	12525, 52520, 52525, 2525, 52000, 52525, 525, 240
+	.word	52525, 525, 0, 52500, 176525, 177777, 52527, 122525
+	.word	65252, 52525
+WSP704:	.word	52525, 52500, 52525, 12525, 50000, 52525, 2525, 1200
+	.word	52524, 2525, 0, 52400, 172525, 177777, 52537, 112525
+	.word	125252, 52525
+WSP705:	.word	52525, 52401, 52525, 52525, 40000, 52525, 12525, 5000
+	.word	52520, 12525, 0, 52000, 152525, 177777, 52577, 52525
+	.word	125252, 52526
+WSP706:	.word	52525, 52005, 52525, 52525, 1, 52525, 52525, 24000
+	.word	52500, 52525, 0, 50000, 52525, 177777, 52777, 52525
+	.word	125251, 52532
+WSP707:	.word	52525, 50025, 52525, 52525, 5, 52524, 52525, 120001
+	.word	52400, 52525, 1, 40000, 52525, 177775, 53777, 52525
+	.word	125245, 52552
+WSP710:	.word	52525, 52005, 52525, 12525, 50000, 52525, 125, 40012
+	.word	52525, 0, 40000, 52525, 177765, 77777, 52525, 125125
+	.word	55252, 52525
+WSP711:	.word	52525, 50025, 52525, 52525, 40000, 52525, 525, 50
+	.word	52525, 1, 0, 52525, 177725, 177777, 52525, 124525
+	.word	65252, 52525
+WSP712:	.word	52525, 40125, 52525, 52525, 1, 52525, 2525, 240
+	.word	52524, 5, 0, 52524, 177525, 177777, 52527, 122525
+	.word	125252, 52525
+WSP713:	.word	52525, 525, 52525, 52525, 5, 52524, 12525, 1200
+	.word	52520, 25, 0, 52520, 176525, 177777, 52537, 112525
+	.word	125252, 52526
+WSP714:	.word	52525, 2525, 52524, 52525, 25, 52520, 52525, 5000
+	.word	52500, 125, 0, 52500, 172525, 177777, 52577, 52525
+	.word	125252, 52532
+WSP715:	.word	52525, 12525, 52520, 52525, 125, 52500, 52525, 24001
+	.word	52400, 525, 0, 52400, 152525, 177777, 52777, 52525
+	.word	125251, 52552
+WSP716:	.word	52525, 52525, 52500, 52525, 525, 52400, 52525, 120005
+	.word	52000, 2525, 0, 52000, 52525, 177777, 53777, 52525
+	.word	125245, 52652
+WSP717:	.word	52525, 52525, 52401, 52525, 2525, 52000, 52525, 100025
+	.word	50002, 12525, 0, 50000, 52525, 177775, 57777, 52525
+	.word	125225, 53252
+
+End:
+	.end	Start
