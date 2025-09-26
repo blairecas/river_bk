@@ -65,7 +65,7 @@ function ProcessFile ( $fname )
     $arr = explode(".", $fnamebase);
     $sname = strtoupper($arr[0]);
     $sprtype = substr($sname, 0, 1);
-    // echo "$fname - $sname\n";
+    echo "$fname - $sname\n";
     
     $im = imagecreatefrompng($fname);
     $width  = imagesx($im);		//
