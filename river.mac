@@ -20,7 +20,7 @@ Start:	mov	#1000, SP
 	mov	#VsyInt, @#100
 	mov	#200, @#102
 	mov	#1200, TimerCycle
-	mov	#120, TimerLine
+	mov	#1150, TimerLine
 10$:	; keyboard interrupts
 	mov	#KbdInt, @#60
 	clr	@#62
@@ -138,13 +138,13 @@ MainGame:
 	call	Rotate				; one line of rotation
 10$:	call	SetScroll
 	call	DrawFirstLine			; draw line first asap
+	call	XorPlane
 	call	DrawObjects			; draw block objects
 	call	ClearKeys
 	call	ProcObjects			; process objects moving etc.
-	call	DrawPlane			; xor plane
 	call	Rotate
-	call	DrawPlane			; xor plane
 	call	PlaneKeys			; process plane keys
+	call	DrawPlane
 	return
 
 
@@ -439,7 +439,7 @@ MineLine:
 	mov	Block0+2, R0			; X/8 coord
 	asl	R0
 	add	R0, R5				; vaddr+X -> R5
-	mov	#WCP50, R0
+	mov	#WCP40, R0
 	asl	R1
 	asl	R1				; sprite line * 3 (2-words)
 	add	R1, R0
@@ -479,7 +479,7 @@ DrawExplo:
 ; TODO: too much bytes for simple animation, cut them at least in half
 ;			0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
 ExpAniNum:	.byte	0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 4
-ExpAniMine:	.word	WCP51, WCP52, WCPBLU
+ExpAniMine:	.word	WCP41, WCP42, WCPBLU
 ExpAniHeli:	.word	WSPL10, WSPL11, 0
 ExpAniShip:	.word	WSPL12, WSPL13, 0
 
@@ -767,11 +767,17 @@ DrawPlane:
 	add	R1, R2
 	bpl	02$
 	sub	#40000, R2
-02$:	; get sprite addr
-	bic	#^B1111111111111000, R0
+02$:	mov	R2, PlaneVaddr			; store vaddr for later use
+	bic	#^B1111111111111000, R0		; get sprite addr
 	asl	R0
+PlaneTable =: .+2
 	mov	WSPT00(R0), R0
-	; draw it
+	mov	R0, PlaneSaddr			; store sprite addr
+XorPlane:
+	mov	(PC)+, R0
+PlaneSaddr:	.word	0
+	mov	(PC)+, R2
+PlaneVaddr:	.word	0
 	mov	#C_SCRWID-6, R5
 	mov	#13., R3
 10$:	mov	(R0)+, R1
@@ -1308,7 +1314,7 @@ PlaneKeys:
 20$:	; right
 	tstb	bKeyRight
 	beq	30$
-	mov	#2, PlaneDir			; moving right sprite
+	mov	#WSPT02, PlaneTable		; plane sprites table right
 	add	PlaneVel, PlaneX
 	cmp	PlaneX, #255.-16.*256.
 	blos	PlaneVelInc
@@ -1317,14 +1323,14 @@ PlaneKeys:
 30$:	; left
 	tstb	bKeyLeft
 	beq	40$
-	mov	#1, PlaneDir
+	mov	#WSPT01, PlaneTable		; plane sprites table left
 	sub	PlaneVel, PlaneX
 	bcc	PlaneVelInc
 	clr	PlaneX
 	br	PlaneVelInc
 40$:	; no left or right - reset plane moving
 PlaneVelReset =: .
-	clr	PlaneDir
+	mov	#WSPT00, PlaneTable		; plane sprites table center
 	mov	#C_PLAVEL_MIN, PlaneVel
 	mov	#C_PLADVEL_MIN, PlaneDVel
 	return
@@ -1715,15 +1721,15 @@ WCP31:	.word	125252, 52, 100000, 125252, 25252, 0, 0, 125200
 
 
 ; mine 
-WCP50:	.word	12525, 52524, 12521, 42524, 405, 50100, 5, 50000
+WCP40:	.word	12525, 52524, 12521, 42524, 405, 50100, 5, 50000
 	.word	7425, 52000, 7405, 50000, 5, 50000, 0, 0
 	.word	63145, 63146
 
 ; mine explosion
-WCP51:	.word	122525, 52525, 52525, 52645, 52645, 52525, 52525, 52532
+WCP41:	.word	122525, 52525, 52525, 52645, 52645, 52525, 52525, 52532
 	.word	55125, 52525, 52525, 52525, 52525, 52645, 52645, 52525
 	.word	52525, 64532
-WCP52:	.word	52525, 52525, 50125, 52525, 52525, 52645, 52405, 2525
+WCP42:	.word	52525, 52525, 50125, 52525, 52525, 52645, 52405, 2525
 	.word	2525, 52525, 52525, 55125, 52532, 52532, 50125, 52525
 	.word	52525, 52405
 
@@ -2017,6 +2023,8 @@ WSP717:	.word	52525, 52525, 52401, 52525, 2525, 52000, 52525, 100025
 
 ; our plane, straight, bank left, bank right
 WSPT00:	.word	WSP000, WSP001, WSP002, WSP003, WSP004, WSP005, WSP006, WSP007
+WSPT01:	.word	WSP010, WSP011, WSP012, WSP013, WSP014, WSP015, WSP016, WSP017
+WSPT02:	.word	WSP020, WSP021, WSP022, WSP023, WSP024, WSP025, WSP026, WSP027
 
 WSP000:	.word	140000, 3, 0, 140000, 3, 0, 140000, 3
 	.word	0, 176000, 77, 0, 177700, 1777, 0, 177774
@@ -2058,6 +2066,89 @@ WSP007:	.word	0, 170000, 0, 0, 170000, 0, 0, 170000
 	.word	177777, 7777, 0, 177777, 7777, 0, 170377, 7760
 	.word	0, 170017, 7400, 0, 170000, 0, 0, 177400
 	.word	17, 0, 177760, 377, 0, 170360, 360
+
+WSP010:	.word	140000, 3, 0, 140000, 3, 0, 140000, 3
+	.word	0, 176000, 3, 0, 177700, 77, 0, 177700
+	.word	1777, 0, 177700, 1777, 0, 141700, 1777, 0
+	.word	140000, 1703, 0, 140000, 3, 0, 176000, 3
+	.word	0, 177700, 77, 0, 140000, 377, 0
+WSP011:	.word	0, 17, 0, 0, 17, 0, 0, 17
+	.word	0, 170000, 17, 0, 177400, 377, 0, 177400
+	.word	7777, 0, 177400, 7777, 0, 7400, 7777, 0
+	.word	0, 7417, 0, 0, 17, 0, 170000, 17
+	.word	0, 177400, 377, 0, 0, 1777, 0
+WSP012:	.word	0, 74, 0, 0, 74, 0, 0, 74
+	.word	0, 140000, 77, 0, 176000, 1777, 0, 176000
+	.word	37777, 0, 176000, 37777, 0, 36000, 37774, 0
+	.word	0, 36074, 0, 0, 74, 0, 140000, 77
+	.word	0, 176000, 1777, 0, 0, 7774, 0
+WSP013:	.word	0, 360, 0, 0, 360, 0, 0, 360
+	.word	0, 0, 377, 0, 170000, 7777, 0, 170000
+	.word	177777, 0, 170000, 177777, 0, 170000, 177760, 0
+	.word	0, 170360, 0, 0, 360, 0, 0, 377
+	.word	0, 170000, 7777, 0, 0, 37760, 0
+WSP014:	.word	0, 1700, 0, 0, 1700, 0, 0, 1700
+	.word	0, 0, 1774, 0, 140000, 37777, 0, 140000
+	.word	177777, 3, 140000, 177777, 3, 140000, 177703, 3
+	.word	0, 141700, 3, 0, 1700, 0, 0, 1774
+	.word	0, 140000, 37777, 0, 0, 177700, 0
+WSP015:	.word	0, 7400, 0, 0, 7400, 0, 0, 7400
+	.word	0, 0, 7760, 0, 0, 177777, 0, 0
+	.word	177777, 17, 0, 177777, 17, 0, 177417, 17
+	.word	0, 7400, 17, 0, 7400, 0, 0, 7760
+	.word	0, 0, 177777, 0, 0, 177400, 3
+WSP016:	.word	0, 36000, 0, 0, 36000, 0, 0, 36000
+	.word	0, 0, 37700, 0, 0, 177774, 3, 0
+	.word	177774, 77, 0, 177774, 77, 0, 176074, 77
+	.word	0, 36000, 74, 0, 36000, 0, 0, 37700
+	.word	0, 0, 177774, 3, 0, 176000, 17
+WSP017:	.word	0, 170000, 0, 0, 170000, 0, 0, 170000
+	.word	0, 0, 177400, 0, 0, 177760, 17, 0
+	.word	177760, 377, 0, 177760, 377, 0, 170360, 377
+	.word	0, 170000, 360, 0, 170000, 0, 0, 177400
+	.word	0, 0, 177760, 17, 0, 170000, 77
+
+WSP020:	.word	140000, 3, 0, 140000, 3, 0, 140000, 3
+	.word	0, 140000, 77, 0, 176000, 1777, 0, 177700
+	.word	1777, 0, 177700, 1777, 0, 177700, 1703, 0
+	.word	141700, 3, 0, 140000, 3, 0, 140000, 77
+	.word	0, 176000, 1777, 0, 177400, 3, 0
+WSP021:	.word	0, 17, 0, 0, 17, 0, 0, 17
+	.word	0, 0, 377, 0, 170000, 7777, 0, 177400
+	.word	7777, 0, 177400, 7777, 0, 177400, 7417, 0
+	.word	7400, 17, 0, 0, 17, 0, 0, 377
+	.word	0, 170000, 7777, 0, 176000, 17, 0
+WSP022:	.word	0, 74, 0, 0, 74, 0, 0, 74
+	.word	0, 0, 1774, 0, 140000, 37777, 0, 176000
+	.word	37777, 0, 176000, 37777, 0, 176000, 36077, 0
+	.word	36000, 74, 0, 0, 74, 0, 0, 1774
+	.word	0, 140000, 37777, 0, 170000, 77, 0
+WSP023:	.word	0, 360, 0, 0, 360, 0, 0, 360
+	.word	0, 0, 7760, 0, 0, 177777, 0, 170000
+	.word	177777, 0, 170000, 177777, 0, 170000, 170377, 0
+	.word	170000, 360, 0, 0, 360, 0, 0, 7760
+	.word	0, 0, 177777, 0, 140000, 377, 0
+WSP024:	.word	0, 1700, 0, 0, 1700, 0, 0, 1700
+	.word	0, 0, 37700, 0, 0, 177774, 3, 140000
+	.word	177777, 3, 140000, 177777, 3, 140000, 141777, 3
+	.word	140000, 1703, 0, 0, 1700, 0, 0, 37700
+	.word	0, 0, 177774, 3, 0, 1777, 0
+WSP025:	.word	0, 7400, 0, 0, 7400, 0, 0, 7400
+	.word	0, 0, 177400, 0, 0, 177760, 17, 0
+	.word	177777, 17, 0, 177777, 17, 0, 7777, 17
+	.word	0, 7417, 0, 0, 7400, 0, 0, 177400
+	.word	0, 0, 177760, 17, 0, 7774, 0
+WSP026:	.word	0, 36000, 0, 0, 36000, 0, 0, 36000
+	.word	0, 0, 176000, 3, 0, 177700, 77, 0
+	.word	177774, 77, 0, 177774, 77, 0, 37774, 74
+	.word	0, 36074, 0, 0, 36000, 0, 0, 176000
+	.word	3, 0, 177700, 77, 0, 37760, 0
+WSP027:	.word	0, 170000, 0, 0, 170000, 0, 0, 170000
+	.word	0, 0, 170000, 17, 0, 177400, 377, 0
+	.word	177760, 377, 0, 177760, 377, 0, 177760, 360
+	.word	0, 170360, 0, 0, 170000, 0, 0, 170000
+	.word	17, 0, 177400, 377, 0, 177700, 0
+
 
 End:
 	.end	Start

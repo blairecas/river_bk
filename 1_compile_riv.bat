@@ -17,4 +17,4 @@ del _%NAME%.mac
 rem del _%NAME%.lst
 
 echo.
-start ..\..\bkemu\BK_x64.exe /C BK-0010-01 /B .\release\%NAME%.bin
+start ..\..\bkemu\BK_x64.exe /C BK-0011M /B .\release\%NAME%.bin
