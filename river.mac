@@ -20,7 +20,7 @@ Start:	mov	#1000, SP
 	mov	#VsyInt, @#100
 	mov	#200, @#102
 	mov	#1200, TimerCycle
-	mov	#1150, TimerLine
+	mov	#2, TimerLine
 10$:	; keyboard interrupts
 	mov	#KbdInt, @#60
 	clr	@#62
@@ -70,7 +70,7 @@ MainCycle:
 	call	@MainCycleTbl(R0)		; run procedures
 	br	MainCycle
 
-MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGame, MainGame, MainAfterCrash, MainLiveLost, MainGameOver
+MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGame, MainGame, MainAfterCrash, MainLiveLost
 
 
 ; menu prepare
@@ -87,11 +87,6 @@ MainMenu:
 
 ; first stage - init
 MainInit:	
-	cmp	Score, HScore			; update hiscore?
-	ble	10$
-	mov	Score, Hscore
-10$:	clr	Score
-	mov	#9., Lives
 	mov	#1., Level
 	mov	#1., SLevel			; stored level (will continue from it after crash)
 	; reset random, 0x14, 0xA8
@@ -109,13 +104,17 @@ MainInit:
 
 ; second stage - scroll field into view 
 MainScrollInto:
-	call	SetScroll
+	mov	ScrollY, R0
+	add	#1330, R0
+	mov	R0, @#177664
 	call	DrawFirstLine
 	call	DrawObjects			; draw block objects
 	call	Rotate				; one line of rotation
         tst     ScrollY          		; are we at start?
         bne     99$
-	call	DrawPlane
+	inc	ScrollY				; adjust initial plane drawing with +1
+	call	DrawPlane			; draw the plane
+	dec	ScrollY				; revert adjusted scroll
 	inc	CurrentMode
 99$:	return
 
@@ -131,20 +130,28 @@ MainWaitGame:
 
 ; play cycle
 MainGame:
+	; clrb	@#177663
+	mov	ScrollY, R0
+	add	#1330, R0
 	tstb	bKeyUp
 	beq	10$
-	call	SetScroll
+	; scroll 2 lines
+	dec	R0
+	mov	R0, @#177664
 	call	DrawFirstLine			; draw line first asap
 	call	Rotate				; one line of rotation
-10$:	call	SetScroll
-	call	DrawFirstLine			; draw line first asap
+	br	20$
+10$:	; scroll 1 line
+	mov	R0, @#177664
+20$:	call	DrawFirstLine			; draw line first asap
 	call	XorPlane
 	call	DrawObjects			; draw block objects
+	call	DrawPlane
 	call	ClearKeys
+	call	PlaneKeys			; process plane keys
 	call	ProcObjects			; process objects moving etc.
 	call	Rotate
-	call	PlaneKeys			; process plane keys
-	call	DrawPlane
+	; movb	#1, @#177663
 	return
 
 
@@ -159,26 +166,13 @@ MainAfterCrash:
 
 ; live lost - init last bridge variables or game over
 MainLiveLost:
-	dec	Lives
-	ble	90$	
-        mov	RANSLO, RANS0L			; restore random (both)
+        mov	RansLO, RANS0L			; restore random (both)
         mov	RANSLO, RANDLO	
-	mov	SLEVEL, LEVEL			; restore level
+	mov	SLevel, Level			; restore level
 	call	PrepareVars			; game vars from live lost
 	call	ClearScreen
 	mov	#C_MODE_PREPARE, CurrentMode	; second stage again
 	return
-90$:	mov	#C_MODE_OVER, CurrentMode
-	return
-
-
-; game over wait for keypress and go to 1st level
-MainGameOver:
-	movb	bKeyFire, R0
-	beq	99$
-	clrb	bKeyFire
-	mov	#C_MODE_INIT, CurrentMode
-99$:	return
 	
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -279,37 +273,10 @@ PrepareVars:
 	clr	wBlEnd2
 	; plane 
 	mov	#120.*400, PlaneX
-	clr	PlaneDir
 	clr	PlaneStatus
 	call	PlaneVelReset
 	clr	MissileX
 	clr	MissileY
-	mov	#1., SCORED			; will draw score
-	return
-
-
-; set scroll screen 255..0
-SetScroll:
-	mov	ScrollY, R1
-	mov	R1, R0
-;	decb	R0
-	add	#1330, R0
-	mov	R0, @#177664
-;	; clear one line
-;	mov	R1, R0
-;	decb	R0
-;	asl	R0
-;	mov	LineAd(R0), R0
-;	mov	#8., R3
-;	clr	R2
-;10$:	mov	R2, (R0)+
-;	mov	R2, (R0)+
-;	mov	R2, (R0)+
-;	mov	R2, (R0)+
-;	sob	R3, 10$
-	; set first line addr
-	asl	R1
-	mov	LineAd(R1), ScrollVAddr
 	return
 
 
@@ -317,13 +284,11 @@ SetScroll:
 Rotate:	tstb	bKeyDown			; need to slow rotation?
 	beq	8$
 	bit	#1, FrameCount
-	beq	8$
-	return
-8$:	mov	#1., NeedLn			; need to draw first line
+	bne	99$
+8$:	inc	NeedLn				; need to draw first line
 	decb	ScrollY				; decrease scrollline (byte!)
 	dec	BlockY				; decrease blockline
-	blt	10$
-	return
+	bge	99$
 10$:	mov	#31., BlockY			; last block line
 	inc	BloCnt
 	cmp	BloCnt, #8.			; bridge flying by
@@ -331,9 +296,8 @@ Rotate:	tstb	bKeyDown			; need to slow rotation?
 	mov	RanS0L, RanSLO			; now store this level random
 	mov	Level, SLevel			; and store level
 24$:	cmp	BloCnt, #16.
-	bge	30$
-	return
-30$:	; new level
+	blt	99$
+	; new level
 	mov	RanDLO, RanS0L			; 2-bytes random storing when bridge about to spawn
 	clr	BloCnt				; 0th block
 	inc	Level
@@ -350,9 +314,8 @@ Rotate:	tstb	bKeyDown			; need to slow rotation?
 ; draw first line of screen and objects
 DrawFirstLine:	
 	tst	NeedLn				; check if we need to draw anything
-	bne	2$
-	return
-2$:	clr	NeedLn	
+	beq	99$
+	clr	NeedLn	
 	call    MakeBlock         		; try to make a new block
 	; draw normal banks and river
 	mov	#^B1010101010101010, R4		; color = green
@@ -361,7 +324,11 @@ DrawFirstLine:
 	mov	BlockY, R4
 	asl	R4
 	mov	RoadCo(R4), R4			; get road color
-10$:	mov	ScrollVAddr, R5
+10$:	; set first line addr
+	mov	ScrollY, R1
+	asl	R1
+	mov	LineAd(R1), R5
+	mov	R5, ScrollVAddr
 	; draw left bank (R4 - road color if needed)
 	movb	bBlEnd1, R3
 	mov	R3, R2	
@@ -391,13 +358,12 @@ DrawFirstLine:
 	bne	40$
 	call	HouseLine
 40$:	cmpb	Block0, #04.			; if it's a mine in block 0
-	bne	MoveBlendSta
+	bne	50$
 	call	MineLine
-; move blocks end to start
-MoveBlendSta:	
-	add	wBlDiff1, wBlEnd1
+	; move blocks end to start
+50$:	add	wBlDiff1, wBlEnd1
 	add	wBlDiff2, wBlEnd2
-	return
+99$:	return
 
 
 ; draw house line
@@ -465,7 +431,7 @@ DrawObjects:
 DrawOL:	.word	RetAdr, DrawExplo, RetAdr, RetAdr, RetAdr, DrawShip, DrawHeli, DrawBoat, RetAdr
 
 ; draw object explosion proc table
-DexpOL:	.word	RetAdr, RetAdr, RetAdr, RetAdr, DrawMineExp, DrawShipExp, DrawHeliExp, RetAdr, RetAdr
+DexpOL:	.word	RetAdr, RetAdr, RetAdr, RetAdr, DrawMineExp, DrawShipExp, DrawHeliExp, DrawBoatExp, RetAdr
 
 ; (01) draw explosion
 ; R0 - block addr
@@ -745,7 +711,14 @@ DrawBoat:
 	tstb	1(R0)
 	beq	10$
 	mov	#WSP71L, R4
-10$:	jmp	DrawHeliUniv0
+10$:	br	DrawHeliUniv0
+
+
+; (07) draw boat explosion
+; R0 - block addr
+DrawBoatExp:
+	mov	#6., HeliHeight
+	br	DrawHeliExp
 
 
 ; draw player's plane
@@ -765,9 +738,9 @@ DrawPlane:
 	asr	R1
 	asl	R1
 	add	R1, R2
-	bpl	02$
+	bpl	04$
 	sub	#40000, R2
-02$:	mov	R2, PlaneVaddr			; store vaddr for later use
+04$:	mov	R2, PlaneVaddr			; store vaddr for later use
 	bic	#^B1111111111111000, R0		; get sprite addr
 	asl	R0
 PlaneTable =: .+2
@@ -1400,26 +1373,22 @@ CurrentMode:	.word	0
 
 Level:		.word	0			; current level
 SLevel:		.word	0
-LIVES:		.word	0			; lives number (0..9)
-SCORE:		.word	0
-SCORED:		.word	0			; flag <>0 - draw score
-HSCORE:		.word	0
 
 PlaneX:		.word	0			; plane sprite X (float! 0-255 in h-byte, fractional in l-byte)
 PlaneY:		.word	0			; TODO: plane have different bounding box when turning
-PLANX1:		.word	0			; 'actual' plane 'bounding' box (without second Y)
-PLANX2:		.word	0			; because plane is starting from PLANEX+2
-
-PlaneDir:	.word	0			; plane is moving, 1-right, 2-left, 0-straight
 PlaneStatus:	.word	0			; plane status, 0 - normal, 1.. - exploding
 PlaneVel:	.word	0			; plane velocity (float)
 PlaneDVel:	.word	0			; plane velocity addition (float)
 
-MissileX:		.word	0
-MissileY:		.word	0
+MissileX:	.word	0
+MissileY:	.word	0
 
 ScrollY:	.word   0 	   		; scroll line number
 ScrollVAddr:	.word	0			; scroll line vaddr
+BlockY:		.word	31.			; current line number in block 0
+BloCnt:		.word	0			; current block number (0..15, 0 is bridge)
+NeedLn:		.word	1			; need to draw first line
+NoMine:		.word	14.			; max blocks to run until create mine
 
 wBlNext:	.byte	0			; next block upper left bank width (float part)
 bBlNext:	.byte	0			; .. int part
@@ -1434,17 +1403,6 @@ bBlEnd2:	.byte	0			; .. int part
 wBlDiff1:	.word	0			; (start1 - end1) / 32.
 wBlDiff2:	.word	0			; (start2 - end2) / 32.
 
-;BLNXT1:		.word	12.			; next block starting left bank width (in 8-pix)
-;BLSTA1:		.word	12.			; current block starting left bank width
-;BLEND1:		.word	12.			; current block ending left bank width
-;BLSTA2:		.word	0			; current island starting width
-;BLEND2:		.word	0			; current island ending width
-
-BLOCKY:		.word	31.			; current line number in block 0
-BLOCNT:		.word	0			; current block number (0..15, 0 is bridge)
-NEEDLN:		.word	1			; need to draw first line
-
-NoMine:		.word	14.			; max blocks to run until create mine
 
 
 ; Y coord to vaddr
@@ -1481,9 +1439,6 @@ LineAd:		.word	40000, 40100, 40200, 40300, 40400, 40500, 40600, 40700
 		.word	76000, 76100, 76200, 76300, 76400, 76500, 76600, 76700
 		.word	77000, 77100, 77200, 77300, 77400, 77500, 77600, 77700
 
-
-; score add table
-SCOTBL:		.word	0, 0, 0, 0, 80., 30., 60., 100., 500.
 
 ; blocks table (8 objects)
 ; +00 object id (0-nothing, 1..2 - explosions, 3-house, 4-mine, 5-ship, 6-helicopter, 7-boat, 8-bridge)
