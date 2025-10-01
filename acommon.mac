@@ -53,6 +53,13 @@ C_KEY_LEFT	=: 10
 C_KEY_RIGHT	=: 31
 C_KEY_SPACE	=: 40
 
+; joystick default bits
+P_KEY_UP	=: 001
+P_KEY_RIGHT	=: 002
+P_KEY_DOWN	=: 004
+P_KEY_LEFT	=: 010
+P_KEY_FIRE	=: 060 ; 2 buttons 'fire' (40) and 'key A' (20)
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; VI53 in Menestrel
 ; //////////////////////////////////////////////////////////////////////////////
@@ -81,12 +88,19 @@ C_VI53_NONE	=: ^B1000110000000000
 C_FIELD_BOTTOM	= 256.
 
 ; game modes
+C_MODE_MENINIT	= 00.
+C_MODE_MENU	= 01.
 C_MODE_INIT	= 02.
 C_MODE_PREPARE	= 03.
+C_MODE_WAITKEY	= 04.
+C_MODE_GAME	= 05.
 C_MODE_CRASH	= 06.
 C_MODE_LOST	= 07.
-C_MODE_OVER	= 08.
 
 ; plane velocity
 C_PLAVEL_MIN	= 1*256.
 C_PLADVEL_MIN	= 18.
+
+; missile
+C_MIS_DY	= 6	; DY
+C_MIS_VEL	= 6	; velocity

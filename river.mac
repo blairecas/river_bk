@@ -32,6 +32,13 @@ TimerCycle =: .+2
 	mov	#740, @#177706
 	mov	#20, @#177712				; start timer, max speed
 
+	; set joystick bad bits
+	clr	@#177714			; turn off mouse?
+	clr	JoyBadBits
+	clr	R0
+	bis	@#177714, JoyBadBits
+	sob	R0, .-6
+
 Stop:	; stop key goes here
 	mov	#1000, SP
 	mov	#200, @#177716				; speaker DC to low (not high?)
@@ -48,7 +55,6 @@ Stop:	; stop key goes here
 	clr	R0
 	sob	R0, .
 	tst	@#177662				; read keyboard reg just in case
-	clr	KeyCur
 
 	; go to main game cycle
 	clr	CurrentMode
@@ -87,43 +93,41 @@ MainMenu:
 
 ; first stage - init
 MainInit:	
-	mov	#1., Level
-	mov	#1., SLevel			; stored level (will continue from it after crash)
-	; reset random, 0x14, 0xA8
-        movb	#24, RandLo
+	clr	Level
+	clr	SLevel				; stored level (will continue from it after crash)
+        movb	#24, RandLo			; reset random, 0x14, 0xA8
 	movb	#250, RandHi
 	mov	RandLo, RansLo			; duplicate them -> 1
 	mov	RandLo, Rans0L			; duplicate them -> 2
-	;
 	call	PrepareVars			; game vars from live lost
 	call	ClearScreen
-	; go second stage
+	call	Rotate
 	inc	CurrentMode
 	return
 
 
 ; second stage - scroll field into view 
 MainScrollInto:
-	mov	ScrollY, R0
-	add	#1330, R0
-	mov	R0, @#177664
-	call	DrawFirstLine
+	call	SetScroll
+	call	DrawFirstLines
 	call	DrawObjects			; draw block objects
+	tstb	ScrollY         		; are we at start?
+	beq	90$
 	call	Rotate				; one line of rotation
-        tst     ScrollY          		; are we at start?
-        bne     99$
-	inc	ScrollY				; adjust initial plane drawing with +1
-	call	DrawPlane			; draw the plane
-	dec	ScrollY				; revert adjusted scroll
+	return
+90$:	call	DrawPlane			; draw the plane
 	inc	CurrentMode
-99$:	return
+	return
 
 
 ; wait for game key press
 MainWaitGame:
-	clr	KeyCur
-	tst	KeyCur
-	beq	.-4
+	clr	UsedKeys
+10$:	call	RememberKeys
+	tst	UsedKeys
+	beq	10$
+	clr	UsedKeys
+	clr	PpuKeys
 	inc	CurrentMode
 	return
 
@@ -131,24 +135,16 @@ MainWaitGame:
 ; play cycle
 MainGame:
 	; clrb	@#177663
-	mov	ScrollY, R0
-	add	#1330, R0
-	tstb	bKeyUp
-	beq	10$
-	; scroll 2 lines
-	dec	R0
-	mov	R0, @#177664
-	call	DrawFirstLine			; draw line first asap
-	call	Rotate				; one line of rotation
-	br	20$
-10$:	; scroll 1 line
-	mov	R0, @#177664
-20$:	call	DrawFirstLine			; draw line first asap
-	call	XorPlane
+	call	SetScroll
+	call	DrawFirstLines			; draw first line(s) asap
+	call	XorMissile			; (maybe) remove old missile
+	call	DrawMissile			; (maybe) draw new missile
+	call	XorPlane			; remove old plane
 	call	DrawObjects			; draw block objects
-	call	DrawPlane
-	call	ClearKeys
+	call	DrawPlane			; draw plane
+	call	RememberKeys			; remember keys pressed at this point
 	call	PlaneKeys			; process plane keys
+	call	ProcMissile			; process missile
 	call	ProcObjects			; process objects moving etc.
 	call	Rotate
 	; movb	#1, @#177663
@@ -166,8 +162,8 @@ MainAfterCrash:
 
 ; live lost - init last bridge variables or game over
 MainLiveLost:
-        mov	RansLO, RANS0L			; restore random (both)
-        mov	RANSLO, RANDLO	
+        mov	RansLO, Rans0L			; restore random (both)
+        mov	RansLO, RandLO	
 	mov	SLevel, Level			; restore level
 	call	PrepareVars			; game vars from live lost
 	call	ClearScreen
@@ -193,46 +189,51 @@ Kbd274:
 KbdInt:	mov	R0, -(SP)
 	mov	R1, -(SP)
 	mov	@#177662, R0
-	mov	#1, R1
 	mov	R0, (PC)+
 KeyCur:	.word	0
-	cmp	R0, #C_KEY_LEFT
-	bne	10$
-	movb	R1, bKeyLeft
-10$:	cmp	R0, #C_KEY_RIGHT
+	mov	#KeyToPpu, R1
+10$:	cmp	R0, (R1)+
 	bne	20$
-	movb	R1, bKeyRight
-20$:	cmp	R0, #C_KEY_UP
-	bne	30$
-	movb	R1, bKeyUp
-30$:	cmp	R0, #C_KEY_DOWN
-	bne	40$
-	movb	R1, bKeyDown
-40$:	cmp	R0, #C_KEY_SPACE
-	bne	50$
-	movb	R1, bKeyFire
-50$:	mov	(SP)+, R1
+	bis	(R1), PpuKeys
+	br	90$
+20$:	tst	(R1)+
+	cmp	R1, #KeyToPpuEnd
+	bne	10$
+90$:	mov	(SP)+, R1
 	mov	(SP)+, R0
 	rti
 
 
-; clear keys if nothing pressed
-ClearKeys:
+; remember current keys + joy for later use
+RememberKeys:
+	clr	(PC)+
+UsedKeys:	.word	0
+	; joy
+	mov	@#177714, R0			; get joy bits
+	bic	(PC)+, R0			; clear bad ones
+JoyBadBits:	.word	0
+	; if we redefined joy bits - set them 
+	clr	R2
+	mov	#JoyReTable, R1
+02$:	bit	R0, (R1)+
+	beq	04$
+	bis	(R1), R2
+04$:	tst	(R1)+
+	cmp	R1, #JoyReTableEnd
+	blo	02$
+	bis	R2, UsedKeys
+10$:	; keys
 	bit	#100, @#177716			; any key pressed?
 	beq	20$				; yes
-	mov	#bKeyFire, R0
-	clr	(R0)+
-	clr	(R0)+
-	clr	(R0)+
-20$:	return
+PpuKeys =: .+2
+	clr	#000000
+20$:	bis	PpuKeys, UsedKeys
+	return
 
 
 ; wait for vsync
 VsyncWait:
 	mov	#177710, R0
-TimerAvg =: .+2
-	add	(R0), #000000
-	asr	TimerAvg
 TimerLine =: .+2
 	cmp	#000100, (R0)
 	bne	.-4
@@ -251,6 +252,14 @@ ClearScreen:
 	bpl	10$
 
 
+; set screen scroll pos to ScrollY
+SetScroll:
+	mov	ScrollY, R0
+	add	#1330, R0
+	mov	R0, @#177664
+	return
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // GAEMPLAY
 ; //////////////////////////////////////////////////////////////////////////////
@@ -263,60 +272,58 @@ PrepareVars:
         clr     (R0)+
         sob     R1, .-2
 	; scrolls
-	mov 	#255., ScrollY
-	mov	#31., BlockY			; block line = last line
-	mov	#1., NeedLn			; need to draw first line
-	clr	BloCnt				; block counter = 0 (bridge)
+	clr	ScrollY
+	clr	BlockY
+	mov	#-1, BloCnt			; block counter (just before bridge)
 	mov	#14., NoMine			; blocks cnt to 100% make mine
 	; no island just in case (will be bridge anyway)
 	clr	wBlStart2
 	clr	wBlEnd2
-	; plane 
+	; plane & missile
 	mov	#120.*400, PlaneX
 	clr	PlaneStatus
 	call	PlaneVelReset
 	clr	MissileX
-	clr	MissileY
+	clr	MissileSaddr			; do not xor it in first place
 	return
 
 
-; rotate one line
-Rotate:	tstb	bKeyDown			; need to slow rotation?
-	beq	8$
+; game rotation (0, 1 or 2 lines depends on what we are doing)
+Rotate:	mov	#FirstLinesBuf, (PC)+
+FirstLineAddr:	.word	0
+	cmp	CurrentMode, #C_MODE_GAME	; speed up/down can be used only inside main game cycle
+	bne	RotateOne
+	; check up/down keys (priority to down)
+	bit	#P_KEY_DOWN, UsedKeys
+	beq	10$
 	bit	#1, FrameCount
-	bne	99$
-8$:	inc	NeedLn				; need to draw first line
+	beq	RotateOne
+	return
+10$:	bit	#P_KEY_UP, UsedKeys
+	beq	RotateOne
+	call	RotateOne
+
+; rotate one line
+RotateOne:
 	decb	ScrollY				; decrease scrollline (byte!)
 	dec	BlockY				; decrease blockline
-	bge	99$
-10$:	mov	#31., BlockY			; last block line
+	bge	PrepFirstLine
+	mov	#31., BlockY			; last block line
 	inc	BloCnt
-	cmp	BloCnt, #8.			; bridge flying by
-	bne	24$
-	mov	RanS0L, RanSLO			; now store this level random
-	mov	Level, SLevel			; and store level
-24$:	cmp	BloCnt, #16.
-	blt	99$
+	bic	#^B1111111111110000, BloCnt
+	bne	10$
 	; new level
-	mov	RanDLO, RanS0L			; 2-bytes random storing when bridge about to spawn
-	clr	BloCnt				; 0th block
+	mov	RandLO, Rans0L			; 2-bytes random storing when bridge about to spawn
 	inc	Level
-	cmp	Level, #48.			; level++ (max is 48.)
-	blos	99$
-	mov	#47., Level			; level switching 47/48
-99$:	return
+10$:	; if bridge flying by - store things about level
+	cmp	BloCnt, #8.
+	bne	20$
+	mov	Rans0L, RansLO			; now store this level random
+	mov	Level, SLevel			; and store level
+20$:	call	MakeBlock
 
-
-; //////////////////////////////////////////////////////////////////////////////
-; // Draw
-; //////////////////////////////////////////////////////////////////////////////
-
-; draw first line of screen and objects
-DrawFirstLine:	
-	tst	NeedLn				; check if we need to draw anything
-	beq	99$
-	clr	NeedLn	
-	call    MakeBlock         		; try to make a new block
+; prepare first line
+PrepFirstLine:
 	; draw normal banks and river
 	mov	#^B1010101010101010, R4		; color = green
 	tst	BloCnt				; need to draw road?
@@ -324,11 +331,7 @@ DrawFirstLine:
 	mov	BlockY, R4
 	asl	R4
 	mov	RoadCo(R4), R4			; get road color
-10$:	; set first line addr
-	mov	ScrollY, R1
-	asl	R1
-	mov	LineAd(R1), R5
-	mov	R5, ScrollVAddr
+10$:	mov	FirstLineAddr, R5
 	; draw left bank (R4 - road color if needed)
 	movb	bBlEnd1, R3
 	mov	R3, R2	
@@ -360,13 +363,14 @@ DrawFirstLine:
 40$:	cmpb	Block0, #04.			; if it's a mine in block 0
 	bne	50$
 	call	MineLine
-	; move blocks end to start
-50$:	add	wBlDiff1, wBlEnd1
+50$:	; move blocks end to start
+	add	wBlDiff1, wBlEnd1
 	add	wBlDiff2, wBlEnd2
-99$:	return
+	; advance first line addr
+	add	#C_SCRWID, FirstLineAddr
+	return
 
-
-; draw house line
+; prepare house line
 HouseLine:
 	mov	BlockY, R1
 	cmp	R1, #25.			; house lines are 06.-25. inside block
@@ -374,7 +378,7 @@ HouseLine:
 	cmp	R1, #06.
 	blo	99$
 	sub	#06., R1			; R1 = line inside house
-	mov	ScrollVAddr, R5
+	mov	FirstLineAddr, R5
 	mov	Block0+2, R0
 	asl	R0
 	add	R0, R5				; R5 = vaddr + house X
@@ -392,8 +396,7 @@ HouseLine:
 	mov	(R0)+, (R5)+
 99$:	return
 
-
-; draw mine line
+; prepare mine line
 MineLine:
 	mov	BlockY, R1
 	cmp	R1, #20.			; mine lines are 12.-20. inside block
@@ -401,7 +404,7 @@ MineLine:
 	cmp	R1, #12.
 	blo	99$
 	sub	#12., R1			; sprite line -> R1
-	mov	ScrollVAddr, R5
+	mov	FirstLineAddr, R5
 	mov	Block0+2, R0			; X/8 coord
 	asl	R0
 	add	R0, R5				; vaddr+X -> R5
@@ -411,6 +414,38 @@ MineLine:
 	add	R1, R0
 	mov	(R0)+, (R5)+
 	mov	(R0)+, (R5)+
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Draw
+; //////////////////////////////////////////////////////////////////////////////
+
+; draw first line of screen and objects
+DrawFirstLines:
+	; first lines buf addr
+	mov	FirstLineAddr, R0
+	cmp	R0, #FirstLinesBuf
+	blos	99$				; nothing to draw
+	; vaddr
+	clr	R1
+	bisb	ScrollY, R1
+	asl	R1
+	mov	LineAd(R1), R1
+	; draw them (0, 1 or 2 lines)
+10$:	sub	#C_SCRWID, R0
+	mov	#C_SCRWID/8., R3
+20$:	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)+
+	sob	R3, 20$
+	tst	R1
+	bpl	30$
+	sub	#40000, R1
+30$:	sub	#C_SCRWID, R0
+	cmp	R0, #FirstLinesBuf
+	bhi	10$				; nothing to draw
 99$:	return
 	
 
@@ -729,7 +764,7 @@ DrawPlane:
 	bic	#^B1111111100000000, R2
 	asl	R2
 	mov	LineAd(R2), R2
-	mov	PlaneX, R0
+	mov	PlaneX, R0			; plane X is float [int|frac]
 	clrb	R0
 	swab	R0
 	mov	R0, R1
@@ -738,32 +773,178 @@ DrawPlane:
 	asr	R1
 	asl	R1
 	add	R1, R2
-	bpl	04$
+	bpl	10$
 	sub	#40000, R2
-04$:	mov	R2, PlaneVaddr			; store vaddr for later use
+10$:	mov	R2, PlaneVaddr			; store vaddr for later use
 	bic	#^B1111111111111000, R0		; get sprite addr
 	asl	R0
 PlaneTable =: .+2
 	mov	WSPT00(R0), R0
 	mov	R0, PlaneSaddr			; store sprite addr
-XorPlane:
+	br	XorPlane1
+; remove previous plane
+XorPlane =: .
 	mov	(PC)+, R0
-PlaneSaddr:	.word	0
+PlaneSaddr =: .
+	.word	0
+	beq	99$				; we don't have previous plane
 	mov	(PC)+, R2
-PlaneVaddr:	.word	0
+PlaneVaddr =: .
+	.word	0
+	clr	PlaneSaddr			; clear previous plane presence flag
+; R0 - sprite addr (3 words line)
+; R2 - vaddr
+XorPlane1 =: .
 	mov	#C_SCRWID-6, R5
 	mov	#13., R3
-10$:	mov	(R0)+, R1
+20$:	mov	(R0)+, R1
 	xor	R1, (R2)+
 	mov	(R0)+, R1
 	xor	R1, (R2)+
 	mov	(R0)+, R1
 	xor	R1, (R2)+
 	add	R5, R2
+	bpl	30$
+	sub	#40000, R2
+30$:	sob	R3, 20$
+99$:	return
+
+
+; draw missile
+;DrawMissile:
+;	mov	MissileX, R0			; do we have a missile at all?
+;	beq	99$				; nope
+;	mov	ScrollY, R2
+;	add	MissileY, R2
+;	bic	#^B1111111100000000, R2
+;	asl	R2
+;	mov	LineAd(R2), R2
+;	mov	R0, R1				; R1 <- missile X
+;	asr	R1
+;	asr	R1
+;	asr	R1
+;	asl	R1				; get bytes count
+;	add	R1, R2
+;	bpl	20$
+;	sub	#40000, R2
+;20$:	mov	R2, MissileVaddr		; store vaddr for later use
+;	bic	#^B1111111111111000, R0		; get sprite addr
+;	asl	R0				; missile sprite is 2 words
+;	asl	R0				; so it's *4 bytes
+;	add	#MisSprites, R0
+;	mov	R0, MissileSaddr
+;	br	XorMissile1
+; remove missile
+;XorMissile =: .
+;	mov	(PC)+, R0
+;MissileSaddr =: .
+;	.word	0
+;	beq	99$				; we don't have previous missile
+;	mov	(PC)+, R2
+;MissileVaddr =: .
+;	.word	0
+;	clr	MissileSaddr			; clear previous missile flag
+; R0 - sprite addr (2 words line)
+; R2 - vaddr
+;XorMissile1 =: .
+;	mov	#C_SCRWID-4, R5
+;	mov	#6., R3
+;	mov	(R0)+, R1			; first word of missile sprite
+;	mov	(R0), R0			; secont word
+;30$:	xor	R1, (R2)+			; xor them
+;	xor	R0, (R2)+
+;	add	R5, R2
+;	bpl	40$
+;	sub	#40000, R2
+;40$:	sob	R3, 30$
+;99$:	return
+
+; missile sprites with preshift (16-pix 1-line)
+MisSprXor:	.word	^B0000000000001111, ^B0000000000000000
+		.word	^B0000000000111100, ^B0000000000000000
+		.word	^B0000000011110000, ^B0000000000000000
+		.word	^B0000001111000000, ^B0000000000000000
+		.word	^B0000111100000000, ^B0000000000000000
+		.word	^B0011110000000000, ^B0000000000000000
+		.word	^B1111000000000000, ^B0000000000000000
+		.word	^B1100000000000000, ^B0000000000000011
+MisSprBis:	.word	^B0000000000000101, ^B0000000000000000
+		.word	^B0000000000010100, ^B0000000000000000
+		.word	^B0000000001010000, ^B0000000000000000
+		.word	^B0000000101000000, ^B0000000000000000
+		.word	^B0000010100000000, ^B0000000000000000
+		.word	^B0001010000000000, ^B0000000000000000
+		.word	^B0101000000000000, ^B0000000000000000
+		.word	^B0100000000000000, ^B0000000000000001
+
+; draw missile
+DrawMissile:
+	mov	MissileX, R0			; do we have a missile at all?
+	beq	99$				; nope
+	mov	ScrollY, R2
+	add	MissileY, R2
+	bic	#^B1111111100000000, R2
+	asl	R2
+	mov	LineAd(R2), R2
+	mov	R0, R1				; R1 <- missile X
+	asr	R1
+	asr	R1
+	asr	R1
+	asl	R1				; get bytes count
+	add	R1, R2
 	bpl	20$
 	sub	#40000, R2
-20$:	sob	R3, 10$
-	return
+20$:	mov	R2, MissileVaddr		; store vaddr for later use
+	bic	#^B1111111111111000, R0		; get sprite addr
+	asl	R0				; missile sprite is 2 words
+	asl	R0				; so it's *4 bytes
+	add	#MisSprXor, R0
+	mov	R0, MissileSaddr
+; xor it with red, missile usually always on blue water
+; R0 - xor sprite addr (2 words line)
+; R2 - vaddr
+	mov	#C_SCRWID-4, R5
+	mov	#C_MIS_DY, R3
+	mov	(R0)+, R1			; first word of missile sprite
+	mov	(R0), R0			; secont word
+30$:	xor	R1, (R2)+			; xor them
+	xor	R0, (R2)+
+	add	R5, R2
+	bpl	40$
+	sub	#40000, R2
+40$:	sob	R3, 30$
+99$:	return
+
+; remove missile
+; despite the name - we can't use xor now - use usual bic bis
+XorMissile:
+	mov	(PC)+, R5
+MissileSaddr =: .
+	.word	0
+	beq	99$				; we don't have previous missile
+	mov	(PC)+, R2
+MissileVaddr =: .
+	.word	0
+	clr	MissileSaddr			; clear previous missile flag
+; R5 - xor sprite addr (2 words line)
+; R2 - vaddr
+	mov	(R5)+, R0			; words for bic
+	mov	(R5)+, R1
+	add	#28., R5
+	mov	(R5)+, R3			; words for bis
+	mov	(R5)+, R4
+	mov	#C_SCRWID-4, R5
+	mov	#C_MIS_DY, 40$+2
+30$:	bic	R0, (R2)
+	bis	R3, (R2)+
+	bic	R1, (R2)
+	bis	R4, (R2)+
+	add	R5, R2
+	bpl	40$
+	sub	#40000, R2
+40$:	dec	#000000
+	bne	30$
+99$:	return
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -773,12 +954,9 @@ PlaneVaddr:	.word	0
 	; a bit more ships
 MakEnL:	.word	MakeShip, MakeHeli, MakeBoat, MakeShip, MakeHeli, MakeBoat, MakeShip, MakeShip
 
-; check and make new block if needed
+; make new block
 MakeBlock:
-	cmp	BlockY, #31.			; do we need to create new block?
-	beq	10$				; bottom line of block - need to create it
-	return
-10$:	; move 8 blocks down
+	; move 8 blocks down
 	mov     #Block8, R4			; R4-src, R5-dst
 	mov	#Block9, R5
 	mov     #2.*8., R3			; (!) words / 2
@@ -1265,13 +1443,13 @@ CheckGreen:
 	return
 
 
-; process keypresses
+; process plane keypresses
 PlaneKeys:
 	; plane is crashing?
 	tst	PlaneStatus			; plane is crashing - don't process keys
 	bne	99$
 	; key shift - fire missile
-	tstb	bKeyFire
+	bit	#P_KEY_FIRE, UsedKeys
 	beq	20$
 	tst	MissileX			; test for missile already present
 	bne	20$
@@ -1279,22 +1457,22 @@ PlaneKeys:
 	mov	PlaneX, R0			; PlaneX is float (!) [int][frac]
 	clrb	R0
 	swab	R0
-	add	#40., R0			; 32. left margin + 8. plane half-width
+	add	#7., R0				; + plane half-width
 	mov	R0, MissileX
-	mov	#40., MissileY
+	mov	#226., MissileY
 	; firing sound
 	; TODO: make sound
 20$:	; right
-	tstb	bKeyRight
+	bit	#P_KEY_RIGHT, UsedKeys
 	beq	30$
 	mov	#WSPT02, PlaneTable		; plane sprites table right
 	add	PlaneVel, PlaneX
-	cmp	PlaneX, #255.-16.*256.
+	cmp	PlaneX, #255.-16.*400
 	blos	PlaneVelInc
-	mov	#255.-16.*256., PlaneX
+	mov	#255.-16.*400, PlaneX
 	br	PlaneVelInc
 30$:	; left
-	tstb	bKeyLeft
+	bit	#P_KEY_LEFT, UsedKeys
 	beq	40$
 	mov	#WSPT01, PlaneTable		; plane sprites table left
 	sub	PlaneVel, PlaneX
@@ -1309,10 +1487,22 @@ PlaneVelReset =: .
 	return
 PlaneVelInc =: .
 	add	PlaneDVel, PlaneVel
-	cmp	PlaneVel, #3.*256.
+	cmp	PlaneVel, #3.*400
 	blos	99$
-	mov	#3.*256., PlaneVel
+	mov	#3.*400, PlaneVel
 99$:	return
+
+
+; process missile (simple flying up)
+ProcMissile:
+	sub	#C_MIS_VEL-1, MissileY
+	cmp	MissileY, #8.
+	bhi	99$
+	; remove missile 
+	call	XorMissile
+	clr	MissileX
+99$:	return
+
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -1362,13 +1552,6 @@ Random:	movb	RANDHI, R0			; LDA	randomHi
 ; // DATA 
 ; //////////////////////////////////////////////////////////////////////////////
 
-bKeyFire:	.byte	0
-bKeyUp:		.byte	0
-bKeyDown:	.byte	0
-bKeyRight:	.byte	0
-bKeyLeft:	.byte	0
-		.byte	0
-
 CurrentMode:	.word	0
 
 Level:		.word	0			; current level
@@ -1384,10 +1567,8 @@ MissileX:	.word	0
 MissileY:	.word	0
 
 ScrollY:	.word   0 	   		; scroll line number
-ScrollVAddr:	.word	0			; scroll line vaddr
 BlockY:		.word	31.			; current line number in block 0
 BloCnt:		.word	0			; current block number (0..15, 0 is bridge)
-NeedLn:		.word	1			; need to draw first line
 NoMine:		.word	14.			; max blocks to run until create mine
 
 wBlNext:	.byte	0			; next block upper left bank width (float part)
@@ -1403,7 +1584,27 @@ bBlEnd2:	.byte	0			; .. int part
 wBlDiff1:	.word	0			; (start1 - end1) / 32.
 wBlDiff2:	.word	0			; (start2 - end2) / 32.
 
+KeyToPpu:	.word	C_KEY_LEFT,  P_KEY_LEFT
+		.word	C_KEY_RIGHT, P_KEY_RIGHT
+		.word	C_KEY_UP,    P_KEY_UP
+		.word	C_KEY_DOWN,  P_KEY_DOWN
+		.word	C_KEY_SPACE, P_KEY_FIRE
+KeyToPpuEnd:
 
+JoyReTable:	.word	P_KEY_UP,    P_KEY_UP
+JoyReTableR:	.word	P_KEY_RIGHT, P_KEY_RIGHT
+JoyReTableD:	.word	P_KEY_DOWN,  P_KEY_DOWN
+JoyReTableL:	.word	P_KEY_LEFT,  P_KEY_LEFT
+JoyReTableF:	.word	P_KEY_FIRE,  P_KEY_FIRE
+JoyReTableEnd:
+MsgJoy000:	.asciz	"JOYSTICK SETUP"
+MsgJoy001:	.asciz	"PRESS ANY KEY TO USE DEFAULTS"
+MsgJoy002:	.asciz	"PRESS UP"
+MsgJoy003:	.asciz	"PRESS RIGHT"
+MsgJoy004:	.asciz	"PRESS DOWN"
+MsgJoy005:	.asciz	"PRESS LEFT"
+MsgJoy006:	.asciz	"PRESS FIRE"
+		.even
 
 ; Y coord to vaddr
 LineAd:		.word	40000, 40100, 40200, 40300, 40400, 40500, 40600, 40700
@@ -1489,6 +1690,9 @@ BanksRandom:	.byte	1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13,  2,  4,  6
 
 ; //////////////////////////////////////////////////////////////////////////////	
 ; // GRAPHICS DATA
+
+; buffer for first lines
+FirstLinesBuf:	.blkb	2*C_SCRWID
 
 ; road colors
 ROADCO:	.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
