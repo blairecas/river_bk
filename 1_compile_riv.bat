@@ -16,5 +16,8 @@ if %ERRORLEVEL% NEQ 0 ( exit /b )
 del _%NAME%.mac
 rem del _%NAME%.lst
 
+..\scripts\bkdecmd d ./release/andos.img river >NUL
+..\scripts\bkdecmd a ./release/andos.img ./release/river.bin >NUL
+
 echo.
 start ..\..\bkemu\BK_x64.exe /C BK-0011M /B .\release\%NAME%.bin
