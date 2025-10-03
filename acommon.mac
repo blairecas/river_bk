@@ -97,7 +97,8 @@ C_MODE_GAME	= 05.
 C_MODE_CRASH	= 06.
 C_MODE_LOST	= 07.
 
-; plane velocity
+; plane 
+C_PLANE_Y	= 220.
 C_PLAVEL_MIN	= 1*256.
 C_PLADVEL_MIN	= 18.
 

@@ -95,10 +95,7 @@ MainMenu:
 MainInit:	
 	clr	Level
 	clr	SLevel				; stored level (will continue from it after crash)
-        movb	#24, RandLo			; reset random, 0x14, 0xA8
-	movb	#250, RandHi
-	mov	RandLo, RansLo			; duplicate them -> 1
-	mov	RandLo, Rans0L			; duplicate them -> 2
+	mov	#126341, RandLo			; reset random
 	call	PrepareVars			; game vars from live lost
 	call	ClearScreen
 	call	Rotate
@@ -135,18 +132,20 @@ MainWaitGame:
 ; play cycle
 MainGame:
 	; clrb	@#177663
-	call	SetScroll
+	call	SetScroll			; set screen scroll register
 	call	DrawFirstLines			; draw first line(s) asap
 	call	XorMissile			; (maybe) remove old missile
 	call	DrawMissile			; (maybe) draw new missile
 	call	XorPlane			; remove old plane
 	call	DrawObjects			; draw block objects
+	call	ProcObjects			; process objects moving etc.
 	call	DrawPlane			; draw plane
 	call	RememberKeys			; remember keys pressed at this point
 	call	PlaneKeys			; process plane keys
 	call	ProcMissile			; process missile
-	call	ProcObjects			; process objects moving etc.
-	call	Rotate
+	call	Rotate				; lines rotation
+	call	PlaneCollision			; check plane collision
+	call	MissCollision			; check missile collision
 	; movb	#1, @#177663
 	return
 
@@ -162,8 +161,7 @@ MainAfterCrash:
 
 ; live lost - init last bridge variables or game over
 MainLiveLost:
-        mov	RansLO, Rans0L			; restore random (both)
-        mov	RansLO, RandLO	
+	mov	RandStore, RandLo		; restore random saved at a bridge
 	mov	SLevel, Level			; restore level
 	call	PrepareVars			; game vars from live lost
 	call	ClearScreen
@@ -313,13 +311,17 @@ RotateOne:
 	bic	#^B1111111111110000, BloCnt
 	bne	10$
 	; new level
-	mov	RandLO, Rans0L			; 2-bytes random storing when bridge about to spawn
+	mov	RandLO, RandBridge		; store random when bridge is spawning
 	inc	Level
-10$:	; if bridge flying by - store things about level
+	; can't go higher than level 48, or else 'difficulty' will spawn mostly mines and houses
+	cmp	Level, #49.
+	blo	10$
+	mov	#47., Level
+10$:	; we are flying at a bridge
 	cmp	BloCnt, #8.
-	bne	20$
-	mov	Rans0L, RansLO			; now store this level random
-	mov	Level, SLevel			; and store level
+	blo	20$
+	mov	Level, SLevel			; store level #
+	mov	RandBridge, RandStore		; store bridge random
 20$:	call	MakeBlock
 
 ; prepare first line
@@ -405,7 +407,10 @@ MineLine:
 	blo	99$
 	sub	#12., R1			; sprite line -> R1
 	mov	FirstLineAddr, R5
-	mov	Block0+2, R0			; X/8 coord
+	mov	Block0+2, R0			; X coord
+	asr	R0
+	asr	R0
+	asr	R0
 	asl	R0
 	add	R0, R5				; vaddr+X -> R5
 	mov	#WCP40, R0
@@ -428,11 +433,10 @@ DrawFirstLines:
 	cmp	R0, #FirstLinesBuf
 	blos	99$				; nothing to draw
 	; vaddr
-	clr	R1
-	bisb	ScrollY, R1
+	mov	ScrollY, R1
 	asl	R1
 	mov	LineAd(R1), R1
-	; draw them (0, 1 or 2 lines)
+	; draw them
 10$:	sub	#C_SCRWID, R0
 	mov	#C_SCRWID/8., R3
 20$:	mov	(R0)+, (R1)+
@@ -498,7 +502,10 @@ DrawMineExp:
 	incb	R5			; (!) NEED THIS ???
 	asl	R5
 	mov	LineAd(R5), R5
-	asl	R1			; X * 2 (mine X already X*8)
+	asr	R1
+	asr	R1
+	asr	R1
+	asl	R1			; +X
 	add	R1, R5			; vaddr -> R5
 	; draw 2 words x 16 lines
 	mov	#9., R3
@@ -520,7 +527,7 @@ DrawMineExp:
 	sob	R3, 2$
 	return
 10$:	; check if not last block
-	cmp	R0, #BLOCK8
+	cmp	R0, #Block8
 	bhis	20$
 	; blocks 1..7 are drawing fully
 12$:	mov	(R4)+, (R5)+		; draw line
@@ -722,6 +729,8 @@ HeliHeight =: .+2
 ; (06) draw helicopter explosion
 ; R0 - block addr
 DrawHeliExp:
+	mov	#10., HeliHeight
+DrawHeliExp1:
 	mov	2(R0), R1		; X coord
 	clr	R2
 	bisb	4(R0), R2		; Y line
@@ -753,14 +762,14 @@ DrawBoat:
 ; R0 - block addr
 DrawBoatExp:
 	mov	#6., HeliHeight
-	br	DrawHeliExp
+	br	DrawHeliExp1
 
 
 ; draw player's plane
 DrawPlane:
 	; get plane's vaddr
 	mov	ScrollY, R2
-	add	#233., R2
+	add	#C_PLANE_Y, R2
 	bic	#^B1111111100000000, R2
 	asl	R2
 	mov	LineAd(R2), R2
@@ -1148,6 +1157,9 @@ MakeMine:
 10$:	mov	#Block0, R5
 	movb	#04., (R5)+			; 04. - mine
 	clrb	(R5)+				; direction
+	asl	R0
+	asl	R0
+	asl	R0				; make X coord in pixels
 	mov	R0, (R5)+			; X coord
 	mov	ScrollY, R0
 	sub	#20., R0
@@ -1459,7 +1471,7 @@ PlaneKeys:
 	swab	R0
 	add	#7., R0				; + plane half-width
 	mov	R0, MissileX
-	mov	#226., MissileY
+	mov	#C_PLANE_Y-7., MissileY
 	; firing sound
 	; TODO: make sound
 20$:	; right
@@ -1504,6 +1516,136 @@ ProcMissile:
 99$:	return
 
 
+; check missile collision
+MissCollision:
+	tst	MissileX
+	beq	99$
+	; where is our rocket? (in which block #)
+;	mov	#32., R0			; block height
+;	sub	BlockY, R0			; our offset to rocket Y
+	mov	MissileY, R4
+	add	#3, R4				; correct to half-lenght?
+	add	BlockY, R4
+	bic	#^B1111111100000000, R4
+	asr	R4
+	asr	R4
+	bic	#^B1111111100000111, R4		; /32. * 8. bytes block data size
+	add	#Block0, R4			; I hope it's a block addr now, save it
+	mov	R4, -(SP)
+	call	ObjToRect
+	tst	RectsBuf
+	beq	90$
+	; put rocket coords
+	mov	MissileX, R1
+	mov	R1, R2
+	inc	R2
+	inc	R2
+	mov	MissileY, R3
+	add	ScrollY, R3
+	bic	#^B1111111100000000, R3
+	mov	R3, R4
+	add	#5., R4
+	; check intersection
+	call	CheckRect
+	bcs	90$				; C=1 - no intersection
+	; remove rocket
+	clr	MissileX
+	call	XorMissile
+	; blow object then
+	mov	(SP), R0
+	movb	(R0), R1
+	movb	#1, (R0)+
+	movb	R1, (R0)+
+	clrb	4(R0)
+90$:	tst	(SP)+
+99$:	return
+
+
+; check plane intersection with object
+PlaneCollision:
+	; object in Block7
+	mov	#Block7, R4
+	call	ObjToRect
+	tst	RectsBuf
+	beq	99$				; no object or non-collidable
+	; put plane's coords to registers R1 - R4
+	mov	PlaneX, R0			; (!) float
+	clrb	R0
+	swab	R0				; to int
+	; plane's X1
+	inc	R0				; +1 pix to X1
+	mov	R0, R1				; R1 <- X1
+	; plane's X2
+	add	#13., R0			; add plane DX-1
+	mov	R0, R2				; R2 <- X2
+	; plane's Y1
+	mov	ScrollY, R0
+	add	#C_PLANE_Y, R0
+	bic	#^B1111111100000000, R0
+	mov	R0, R3
+	; plane's Y2
+	add	#12., R0			; (!) can overflow 0..255
+	mov	R0, R4
+	; check intersection
+	call	CheckRect
+	bcs	99$				; C=1 - no intersection
+	; blow object then
+	mov	#Block7, R0
+	movb	(R0), R1
+	movb	#1, (R0)+
+	movb	R1, (R0)+
+	clrb	4(R0)
+99$:	return
+
+
+; put object's coords in a table
+; R4 - Block addr, R5 - coords table
+ObjToRect:
+	mov	#RectsBuf, R5
+	movb	(R4)+, R0			; R0 <- obj ID
+	movb	ObjDxTable(R0), R1		; R1 <- obj DX-1
+	bne	10$				; collidable object
+	clr	(R5)
+	return
+10$:	movb	ObjDyTable(R0), R2		; R2 <- obj DY-1
+	inc	R4				; skip direction
+	; put obj's X1
+	mov	(R4)+, R0
+	mov	R0, (R5)+
+	; put obj's X2
+	add	R1, R0
+	mov	R0, (R5)+
+	; put obj's Y1
+	clr	R0
+	bisb	(R4), R0
+	mov	R0, (R5)+
+	; put obj's Y2
+	add	R2, R0
+	mov	R0, (R5)+
+	return
+
+ObjDxTable:	.byte	0, 0, 0, 0, 15., 31., 15., 15., 0	; DX-1
+ObjDyTable:	.byte	0, 0, 0, 0, 08., 07., 09., 05., 0	; DY-1
+RectsBuf:	.blkw	4.					; X1 X2 Y1 Y2
+
+; check rectsbuf intersection
+; R1-X1, R2-X2, R3-Y1, R4-Y2
+; return C = 0 - have intersection
+CheckRect:
+	mov	#RectsBuf, R5
+	cmp	R2, (R5)+			; X2 < obj's X1 ?
+	blo	90$
+	cmp	R1, (R5)+			; X1 > obj's X2 ?
+	bhi	90$
+	cmp	R4, (R5)+			; Y2 < obj's Y1 ?
+	blo	90$
+	cmp	R3, (R5)+			; Y1 > obj's Y2 ?
+	bhi	90$
+	; have intersection, clear C
+	tst	(PC)+
+90$:	sec
+	return
+
 
 ; //////////////////////////////////////////////////////////////////////////////
 ; // UTILS
@@ -1525,27 +1667,42 @@ GetMax:	cmp	R2, R1
 10$:	mov	R2, R0
 	return
 
-RANS0L:	.byte	351				; 0xE9 for saving when new bridge coming up
-RANS0H:	.byte	352				; 0xEA
-RANSLO:	.byte	351				; for saving from RANS0L when new bridge is flying by
-RANSHI:	.byte	352
-RAND:
-RANDLO:	.byte	351
-RANDHI:	.byte	352
-Random:	movb	RANDHI, R0			; LDA	randomHi
-	aslb	R0				; ASL
-	aslb	R0				; ASL
-	aslb	R0				; ASL
-	movb	RANDHI, R1			; EOR	randomHi	
-	xor	R1, R0
-	aslb	R0				; ASL
-	rolb	RANDLO				; ROL	randomLo
-	rolb	RANDHI				; ROL	randomHi
+; 16-bit LFSR (Galois)
+Random:	clc
+	ror	(PC)+
+RandLo =: .
+RandHi =: .+1
+	.word	126341
+	bcc	10$
+	mov	#^B1011010000000000, R0			; for 2^n-1 cycle
+	xor	R0, RandLo
+10$:	mov	RandLo, R0
 	return
-	; (Blaire: its' taken from Atari asm code)
-	; (JTZ: randomHi is very random, randomLo is NOT when more than one bit is used,
-	; because: randomLo[x+1] = randomLo[x]*2 + 0/1, but randomLo is used more often,
-	; randomHi only for new enemy and which. This could make the game a bit predictable.)
+
+RandBridge:	.word	0				; for saving random at bridge spawn
+RandStore:	.word	0				; for storing bridge-spawned random
+
+;RANS0L:	.byte	351				; 0xE9 for saving when new bridge coming up
+;RANS0H:	.byte	352				; 0xEA
+;RANSLO:	.byte	351				; for saving from RANS0L when new bridge is flying by
+;RANSHI:	.byte	352
+;RAND:
+;RANDLO:	.byte	351
+;RANDHI:	.byte	352
+;Random:	movb	RANDHI, R0			; LDA	randomHi
+;	aslb	R0				; ASL
+;	aslb	R0				; ASL
+;	aslb	R0				; ASL
+;	movb	RANDHI, R1			; EOR	randomHi	
+;	xor	R1, R0
+;	aslb	R0				; ASL
+;	rolb	RANDLO				; ROL	randomLo
+;	rolb	RANDHI				; ROL	randomHi
+;	return
+;	; (Blaire: its' taken from Atari asm code)
+;	; (JTZ: randomHi is very random, randomLo is NOT when more than one bit is used,
+;	; because: randomLo[x+1] = randomLo[x]*2 + 0/1, but randomLo is used more often,
+;	; randomHi only for new enemy and which. This could make the game a bit predictable.)
 
 
 ; //////////////////////////////////////////////////////////////////////////////
