@@ -134,7 +134,7 @@ MainGame:
 	; clrb	@#177663
 	call	SetScroll			; set screen scroll register
 	call	DrawFirstLines			; draw first line(s) asap
-	call	XorMissile			; (maybe) remove old missile
+	call	RemoveMissile			; (maybe) remove old missile
 	call	DrawMissile			; (maybe) draw new missile
 	call	XorPlane			; remove old plane
 	call	DrawObjects			; draw block objects
@@ -145,7 +145,8 @@ MainGame:
 	call	ProcMissile			; process missile
 	call	Rotate				; lines rotation
 	call	PlaneCollision			; check plane collision
-	call	MissCollision			; check missile collision
+	call	MissCollision			; check missile collision with objects
+	call	MissGround			; check missile collision with ground
 	; movb	#1, @#177663
 	return
 
@@ -819,55 +820,6 @@ XorPlane1 =: .
 99$:	return
 
 
-; draw missile
-;DrawMissile:
-;	mov	MissileX, R0			; do we have a missile at all?
-;	beq	99$				; nope
-;	mov	ScrollY, R2
-;	add	MissileY, R2
-;	bic	#^B1111111100000000, R2
-;	asl	R2
-;	mov	LineAd(R2), R2
-;	mov	R0, R1				; R1 <- missile X
-;	asr	R1
-;	asr	R1
-;	asr	R1
-;	asl	R1				; get bytes count
-;	add	R1, R2
-;	bpl	20$
-;	sub	#40000, R2
-;20$:	mov	R2, MissileVaddr		; store vaddr for later use
-;	bic	#^B1111111111111000, R0		; get sprite addr
-;	asl	R0				; missile sprite is 2 words
-;	asl	R0				; so it's *4 bytes
-;	add	#MisSprites, R0
-;	mov	R0, MissileSaddr
-;	br	XorMissile1
-; remove missile
-;XorMissile =: .
-;	mov	(PC)+, R0
-;MissileSaddr =: .
-;	.word	0
-;	beq	99$				; we don't have previous missile
-;	mov	(PC)+, R2
-;MissileVaddr =: .
-;	.word	0
-;	clr	MissileSaddr			; clear previous missile flag
-; R0 - sprite addr (2 words line)
-; R2 - vaddr
-;XorMissile1 =: .
-;	mov	#C_SCRWID-4, R5
-;	mov	#6., R3
-;	mov	(R0)+, R1			; first word of missile sprite
-;	mov	(R0), R0			; secont word
-;30$:	xor	R1, (R2)+			; xor them
-;	xor	R0, (R2)+
-;	add	R5, R2
-;	bpl	40$
-;	sub	#40000, R2
-;40$:	sob	R3, 30$
-;99$:	return
-
 ; missile sprites with preshift (16-pix 1-line)
 MisSprXor:	.word	^B0000000000001111, ^B0000000000000000
 		.word	^B0000000000111100, ^B0000000000000000
@@ -885,6 +837,14 @@ MisSprBis:	.word	^B0000000000000101, ^B0000000000000000
 		.word	^B0001010000000000, ^B0000000000000000
 		.word	^B0101000000000000, ^B0000000000000000
 		.word	^B0100000000000000, ^B0000000000000001
+MisSprGrn:	.word	^B0000000000001010, ^B0000000000000000
+		.word	^B0000000000101000, ^B0000000000000000
+		.word	^B0000000010100000, ^B0000000000000000
+		.word	^B0000001010000000, ^B0000000000000000
+		.word	^B0000101000000000, ^B0000000000000000
+		.word	^B0010100000000000, ^B0000000000000000
+		.word	^B1010000000000000, ^B0000000000000000
+		.word	^B1000000000000000, ^B0000000000000010
 
 ; draw missile
 DrawMissile:
@@ -912,6 +872,7 @@ DrawMissile:
 ; xor it with red, missile usually always on blue water
 ; R0 - xor sprite addr (2 words line)
 ; R2 - vaddr
+XorMissile =: .
 	mov	#C_SCRWID-4, R5
 	mov	#C_MIS_DY, R3
 	mov	(R0)+, R1			; first word of missile sprite
@@ -925,8 +886,8 @@ DrawMissile:
 99$:	return
 
 ; remove missile
-; despite the name - we can't use xor now - use usual bic bis
-XorMissile:
+; we can't use xor now - use usual bic bis
+RemoveMissile:
 	mov	(PC)+, R5
 MissileSaddr =: .
 	.word	0
@@ -1508,10 +1469,10 @@ PlaneVelInc =: .
 ; process missile (simple flying up)
 ProcMissile:
 	sub	#C_MIS_VEL-1, MissileY
-	cmp	MissileY, #8.
+	cmp	MissileY, #6.
 	bhi	99$
 	; remove missile 
-	call	XorMissile
+	call	RemoveMissile
 	clr	MissileX
 99$:	return
 
@@ -1521,8 +1482,6 @@ MissCollision:
 	tst	MissileX
 	beq	99$
 	; where is our rocket? (in which block #)
-;	mov	#32., R0			; block height
-;	sub	BlockY, R0			; our offset to rocket Y
 	mov	MissileY, R4
 	add	#3, R4				; correct to half-lenght?
 	add	BlockY, R4
@@ -1550,7 +1509,7 @@ MissCollision:
 	bcs	90$				; C=1 - no intersection
 	; remove rocket
 	clr	MissileX
-	call	XorMissile
+	call	RemoveMissile
 	; blow object then
 	mov	(SP), R0
 	movb	(R0), R1
@@ -1559,6 +1518,31 @@ MissCollision:
 	clrb	4(R0)
 90$:	tst	(SP)+
 99$:	return
+
+
+; check missile collision with ground
+MissGround:
+	tst	MissileX			; no missile?
+	beq	99$				; exit then
+	tst	MissileSaddr			; not drawn yet?
+	beq	99$				; also exit then
+	mov	MissileVaddr, R4
+	sub	#C_MIS_DY-2*C_SCRWID, R4
+	cmp	R4, #40000
+	bhis	10$
+	add	#40000, R4
+10$:	; check just one line of already xor-red missile
+	cmp	(R4)+, #^B1010101010101010
+	beq	100$
+	cmp	(R4)+, #^B1010101010101010
+	beq	100$
+99$:	return
+100$:	; collided - remove missile
+	clr	MissileX
+	mov	MissileVaddr, R2
+	mov	MissileSaddr, R0
+	clr	MissileSaddr
+	jmp	XorMissile
 
 
 ; check plane intersection with object
@@ -1674,35 +1658,13 @@ RandLo =: .
 RandHi =: .+1
 	.word	126341
 	bcc	10$
-	mov	#^B1011010000000000, R0			; for 2^n-1 cycle
+	mov	#^B1011010000000000, R0		; for 2^n-1 cycle
 	xor	R0, RandLo
 10$:	mov	RandLo, R0
 	return
 
-RandBridge:	.word	0				; for saving random at bridge spawn
-RandStore:	.word	0				; for storing bridge-spawned random
-
-;RANS0L:	.byte	351				; 0xE9 for saving when new bridge coming up
-;RANS0H:	.byte	352				; 0xEA
-;RANSLO:	.byte	351				; for saving from RANS0L when new bridge is flying by
-;RANSHI:	.byte	352
-;RAND:
-;RANDLO:	.byte	351
-;RANDHI:	.byte	352
-;Random:	movb	RANDHI, R0			; LDA	randomHi
-;	aslb	R0				; ASL
-;	aslb	R0				; ASL
-;	aslb	R0				; ASL
-;	movb	RANDHI, R1			; EOR	randomHi	
-;	xor	R1, R0
-;	aslb	R0				; ASL
-;	rolb	RANDLO				; ROL	randomLo
-;	rolb	RANDHI				; ROL	randomHi
-;	return
-;	; (Blaire: its' taken from Atari asm code)
-;	; (JTZ: randomHi is very random, randomLo is NOT when more than one bit is used,
-;	; because: randomLo[x+1] = randomLo[x]*2 + 0/1, but randomLo is used more often,
-;	; randomHi only for new enemy and which. This could make the game a bit predictable.)
+RandBridge:	.word	0			; for saving random at bridge spawn
+RandStore:	.word	0			; for storing bridge-spawned random
 
 
 ; //////////////////////////////////////////////////////////////////////////////
