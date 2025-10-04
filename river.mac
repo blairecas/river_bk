@@ -56,6 +56,9 @@ Stop:	; stop key goes here
 	sob	R0, .
 	tst	@#177662				; read keyboard reg just in case
 
+	; setup joystick
+	call	JoySetup
+
 	; go to main game cycle
 	clr	CurrentMode
 	br	MainCycle
@@ -435,8 +438,10 @@ DrawFirstLines:
 	blos	99$				; nothing to draw
 	; vaddr
 	mov	ScrollY, R1
-	asl	R1
-	mov	LineAd(R1), R1
+	swab	R1
+	ror	R1
+	ror	R1
+	add	#C_VADDR, R1
 	; draw them
 10$:	sub	#C_SCRWID, R0
 	mov	#C_SCRWID/8., R3
@@ -500,9 +505,11 @@ DrawMineExp:
 	mov	ExpAniMine(R5), R4
 	; get vaddr
 	mov	R2, R5
-	incb	R5			; (!) NEED THIS ???
-	asl	R5
-	mov	LineAd(R5), R5
+	incb	R5			; (!) NEED THIS
+	swab	R5
+	ror	R5
+	ror	R5
+	add	#C_VADDR, R5
 	asr	R1
 	asr	R1
 	asr	R1
@@ -574,8 +581,10 @@ DrawShipUniv0:
 DrawShipUniv1:
 	; vaddr
 	mov	R2, R5
-	asl	R5
-	mov	LineAd(R5), R5			; vaddr -> R5
+	swab	R5
+	ror	R5
+	ror	R5
+	add	#C_VADDR, R5
 	asr	R1
 	asr	R1
 	asr	R1				; X coarse
@@ -675,8 +684,10 @@ DrawHeliUniv0:
 DrawHeliUniv1:
 	; vaddr
 	mov	R2, R5
-	asl	R5
-	mov	LineAd(R5), R5			; vaddr -> R5
+	swab	R5
+	ror	R5
+	ror	R5
+	add	#C_VADDR, R5
 	asr	R1
 	asr	R1
 	asr	R1				; X coarse
@@ -772,8 +783,10 @@ DrawPlane:
 	mov	ScrollY, R2
 	add	#C_PLANE_Y, R2
 	bic	#^B1111111100000000, R2
-	asl	R2
-	mov	LineAd(R2), R2
+	swab	R2
+	ror	R2
+	ror	R2
+	add	#C_VADDR, R2
 	mov	PlaneX, R0			; plane X is float [int|frac]
 	clrb	R0
 	swab	R0
@@ -853,8 +866,10 @@ DrawMissile:
 	mov	ScrollY, R2
 	add	MissileY, R2
 	bic	#^B1111111100000000, R2
-	asl	R2
-	mov	LineAd(R2), R2
+	swab	R2
+	ror	R2
+	ror	R2
+	add	#C_VADDR, R2
 	mov	R0, R1				; R1 <- missile X
 	asr	R1
 	asr	R1
@@ -1396,8 +1411,10 @@ ProcBoat:
 CheckGreen:	
 	clr	R2
 	bisb	4(R0), R2			; Y line
-	asl	R2
-	mov	LineAd(R2), R2			; vaddr -> R2
+	swab	R2
+	ror	R2
+	ror	R2
+	add	#C_VADDR, R2
 	mov	2(R0), R1			; X coord
 	asr	R1
 	asr	R1
@@ -1667,6 +1684,176 @@ RandBridge:	.word	0			; for saving random at bridge spawn
 RandStore:	.word	0			; for storing bridge-spawned random
 
 
+; mask words for coloring
+PriColorsTbl:	.word	^B1111111111111111, ^B1010101010101010, ^B0101010101010101, ^B0000000000000000
+
+; unpack font byte R4 -> font word R4
+UnpFont:
+	mov	R0, -(SP)
+	mov	R1, -(SP)
+	mov	#8., R1
+	clr	R0
+10$:	rorb	R4
+	bcs	20$
+	ror	R0
+	ror	R0
+	sob	R1, 10$
+	br	30$
+20$:	ror	R0
+	sec
+	ror	R0
+	sob	R1, 10$
+30$:	mov	R0, R4
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	return
+
+
+; print string
+; R0 - string
+; return R0 - next string addr
+Print:	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	R4, -(SP)
+	mov	R5, -(SP)
+PrintVaddr =: .+2
+	mov	#40000, R5
+10$:	movb	(R0)+, R1
+	beq	90$
+	cmp	R1, #3.			; is it special symbol
+	bhi	20$
+	; change font color mask
+	asl	R1
+	mov	PriColorsTbl(R1), R3
+	br	10$
+20$:	sub	#'0, R1			; relative to '0'
+	bge	30$
+	mov	#16., R1		; any chars below '0' converted to #16 (here its a space)
+30$:	asl	R1			; *16 bytes (character font size)
+	asl	R1
+	asl	R1
+FontDataAddr =: .+2
+	add	#FontData, R1		; R1 = font data
+	mov	#8., R2
+40$:	clr	R4
+	bisb	(R1)+, R4
+	call	UnpFont
+	bic	R3, R4
+	mov	R4, (R5)
+	add	#C_SCRWID, R5
+	sob	R2, 40$
+	sub	#C_SCRWID*8.-2, R5	; advance vaddr
+	br	10$
+90$:	add	#10.*C_SCRWID, PrintVaddr
+	mov	(SP)+, R5
+	mov	(SP)+, R4
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	return
+
+FontData:
+	.byte	76, 147, 147, 147, 147, 177, 76, 0
+	.byte	30, 34, 34, 30, 30, 176, 176, 0
+	.byte	76, 163, 70, 34, 16, 177, 177, 0
+	.byte	176, 60, 30, 60, 147, 177, 76, 0
+	.byte	3, 3, 73, 177, 70, 70, 70, 0
+	.byte	177, 7, 77, 140, 147, 177, 76, 0
+	.byte	76, 7, 77, 147, 147, 177, 76, 0
+	.byte	177, 161, 70, 34, 16, 7, 7, 0
+	.byte	76, 147, 76, 147, 147, 177, 76, 0
+	.byte	76, 147, 147, 176, 70, 34, 16, 0
+	.byte	0, 30, 30, 0, 30, 30, 0, 0
+	.byte	0, 0, 0, 76, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 0, 30, 30, 0
+	.byte	0, 0, 0, 0, 0, 30, 30, 20
+	.byte	0, 0, 60, 30, 14, 6, 0, 0
+	.byte	30, 30, 30, 30, 0, 30, 30, 0
+	.byte	0, 0, 0, 0, 0, 0, 0, 0
+	.byte	34, 76, 147, 147, 177, 147, 147, 0
+	.byte	77, 147, 77, 147, 147, 147, 77, 0
+	.byte	76, 147, 7, 7, 147, 177, 76, 0
+	.byte	37, 67, 147, 147, 67, 77, 37, 0
+	.byte	177, 7, 77, 7, 7, 177, 177, 0
+	.byte	177, 7, 77, 7, 7, 7, 7, 0
+	.byte	176, 7, 7, 167, 147, 177, 176, 0
+	.byte	147, 147, 177, 147, 147, 147, 147, 0
+	.byte	76, 34, 34, 34, 34, 76, 76, 0
+	.byte	140, 140, 140, 140, 147, 176, 74, 0
+	.byte	147, 67, 37, 37, 67, 147, 147, 0
+	.byte	7, 7, 7, 7, 7, 177, 177, 0
+	.byte	143, 167, 177, 153, 143, 143, 143, 0
+	.byte	147, 157, 177, 177, 177, 167, 147, 0
+	.byte	76, 143, 143, 143, 143, 177, 76, 0
+	.byte	77, 147, 147, 177, 77, 7, 7, 0
+	.byte	76, 147, 147, 147, 67, 176, 154, 0
+	.byte	77, 147, 147, 77, 77, 147, 147, 0
+	.byte	76, 7, 76, 140, 140, 177, 77, 0
+	.byte	177, 34, 34, 34, 34, 34, 34, 0
+	.byte	147, 147, 147, 147, 147, 177, 177, 0
+	.byte	147, 147, 147, 147, 177, 76, 34, 0
+	.byte	143, 143, 153, 177, 177, 167, 143, 0
+	.byte	147, 147, 74, 74, 147, 147, 147, 0
+	.byte	143, 143, 76, 34, 34, 34, 34, 0
+	.byte	177, 70, 34, 16, 7, 177, 177, 0
+	.byte	0, 0, 0, 0, 0, 0, 76, 0
+	.byte	30, 34, 14, 14, 14, 34, 30, 0
+	.byte	14, 34, 30, 30, 30, 34, 14, 0
+
+
+; setup joy redefine table (if user want so, doing that only once)
+JoySetup:
+	mov	#10.*C_SCRWID+2+C_VADDR, PrintVaddr
+	mov	#MsgJoy000, R0
+	call	Print
+	call	Print
+	add	#10.*C_SCRWID, PrintVaddr
+	; for double press detection
+JoyTempDD =: .+2
+	clr	#000000
+	mov	#JoyReTable, R5
+	mov	#5, R4
+10$:	call	Print
+	call	SetJoyKey
+	sob	R4, 10$
+	return
+
+; wait for joy input (or keypress)
+; R5 - where to put it
+; return R5 - where to put next
+SetJoyKey:
+	mov	JoyTempDD, R2
+	; wait for press
+10$:	bit	#100, @#177716
+	beq	90$
+	mov	@#177714, R1
+	bic	JoyBadBits, R1
+	beq	10$
+	; check for double press
+	bis	R1, R2
+	cmp	JoyTempDD, R2
+	beq	10$
+	; update JoyReTable
+	mov	R1, (R5)+
+	; wait for release
+20$:	bit	#100, @#177716
+	beq	90$
+	mov	@#177714, R1
+	bic	JoyBadBits, R1
+	bne	20$
+	mov	R2, JoyTempDD
+	tst	(R5)+
+	return
+90$:	; restore defaults
+	mov	#JoyReTableEnd, R5
+	mov	#5, R3
+	mov	-(R5), -(R5)
+	sob	R3, .-2
+	tst	(SP)+				; remove call
+	return					; return from routine above
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // DATA 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -1716,48 +1903,14 @@ JoyReTableD:	.word	P_KEY_DOWN,  P_KEY_DOWN
 JoyReTableL:	.word	P_KEY_LEFT,  P_KEY_LEFT
 JoyReTableF:	.word	P_KEY_FIRE,  P_KEY_FIRE
 JoyReTableEnd:
-MsgJoy000:	.asciz	"JOYSTICK SETUP"
-MsgJoy001:	.asciz	"PRESS ANY KEY TO USE DEFAULTS"
-MsgJoy002:	.asciz	"PRESS UP"
-MsgJoy003:	.asciz	"PRESS RIGHT"
-MsgJoy004:	.asciz	"PRESS DOWN"
-MsgJoy005:	.asciz	"PRESS LEFT"
-MsgJoy006:	.asciz	"PRESS FIRE"
+MsgJoy000:	.asciz	<2>"JOYSTICK SETUP"
+MsgJoy001:	.asciz	<1>"PRESS ANY KEY TO USE DEFAULTS"
+MsgJoy002:	.asciz	<3>"PRESS UP"
+MsgJoy003:	.asciz	<3>"PRESS RIGHT"
+MsgJoy004:	.asciz	<3>"PRESS DOWN"
+MsgJoy005:	.asciz	<3>"PRESS LEFT"
+MsgJoy006:	.asciz	<3>"PRESS FIRE"
 		.even
-
-; Y coord to vaddr
-LineAd:		.word	40000, 40100, 40200, 40300, 40400, 40500, 40600, 40700
-		.word	41000, 41100, 41200, 41300, 41400, 41500, 41600, 41700
-		.word	42000, 42100, 42200, 42300, 42400, 42500, 42600, 42700
-		.word	43000, 43100, 43200, 43300, 43400, 43500, 43600, 43700
-		.word	44000, 44100, 44200, 44300, 44400, 44500, 44600, 44700
-		.word	45000, 45100, 45200, 45300, 45400, 45500, 45600, 45700
-		.word	46000, 46100, 46200, 46300, 46400, 46500, 46600, 46700
-		.word	47000, 47100, 47200, 47300, 47400, 47500, 47600, 47700
-		.word	50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700
-		.word	51000, 51100, 51200, 51300, 51400, 51500, 51600, 51700
-		.word	52000, 52100, 52200, 52300, 52400, 52500, 52600, 52700
-		.word	53000, 53100, 53200, 53300, 53400, 53500, 53600, 53700
-		.word	54000, 54100, 54200, 54300, 54400, 54500, 54600, 54700
-		.word	55000, 55100, 55200, 55300, 55400, 55500, 55600, 55700
-		.word	56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700
-		.word	57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700
-		.word	60000, 60100, 60200, 60300, 60400, 60500, 60600, 60700
-		.word	61000, 61100, 61200, 61300, 61400, 61500, 61600, 61700
-		.word	62000, 62100, 62200, 62300, 62400, 62500, 62600, 62700
-		.word	63000, 63100, 63200, 63300, 63400, 63500, 63600, 63700
-		.word	64000, 64100, 64200, 64300, 64400, 64500, 64600, 64700
-		.word	65000, 65100, 65200, 65300, 65400, 65500, 65600, 65700
-		.word	66000, 66100, 66200, 66300, 66400, 66500, 66600, 66700
-		.word	67000, 67100, 67200, 67300, 67400, 67500, 67600, 67700
-		.word	70000, 70100, 70200, 70300, 70400, 70500, 70600, 70700
-		.word	71000, 71100, 71200, 71300, 71400, 71500, 71600, 71700
-		.word	72000, 72100, 72200, 72300, 72400, 72500, 72600, 72700
-		.word	73000, 73100, 73200, 73300, 73400, 73500, 73600, 73700
-		.word	74000, 74100, 74200, 74300, 74400, 74500, 74600, 74700
-		.word	75000, 75100, 75200, 75300, 75400, 75500, 75600, 75700
-		.word	76000, 76100, 76200, 76300, 76400, 76500, 76600, 76700
-		.word	77000, 77100, 77200, 77300, 77400, 77500, 77600, 77700
 
 
 ; blocks table (8 objects)
