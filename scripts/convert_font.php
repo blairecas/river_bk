@@ -59,12 +59,12 @@
     for ($t=0; $t<$last_tile; $t++)
     {
         $tile = $tilesArray[$t];
-    	for ($i=0; $i<8; $i++)
-	    {
+    	for ($i=0; $i<7; $i++)
+        {
     	    if ($n==0) fputs($f, "\t.byte\t");
-	        $bb = $tile[$i];
-	        fputs($f, decoct($bb));
-	        $n++; if ($n<8) fputs($f, ", "); else { $n=0; fputs($f, "\n"); }
+            $bb = $tile[$i];
+            fputs($f, decoct($bb));
+            $n++; if ($n<7) fputs($f, ", "); else { $n=0; fputs($f, "\n"); }
         }
     }
     fputs($f, "\n");
