@@ -142,6 +142,7 @@ MainGame:
 	call	XorPlane			; remove old plane
 	call	DrawObjects			; draw block objects
 	call	ProcObjects			; process objects moving etc.
+	call	PlaneColGnd			; check plane collision with ground
 	call	DrawPlane			; draw plane
 	call	RememberKeys			; remember keys pressed at this point
 	call	PlaneKeys			; process plane keys
@@ -1624,6 +1625,54 @@ PlaneCollision:
 	blo	99$
 	inc	CurrentMode
 99$:	return
+
+
+; check plane collision with ground
+PlaneColGnd:
+	tst	PlaneStatus			; maybe already blown up
+	bne	99$
+	; check for green by 4 pixels of a plane
+	mov	#C_PLANE_Y, R1
+	mov	PlaneX, R0
+	clrb	R0
+	swab	R0
+	add	#7, R0
+	call	CheckPixGreen
+	beq	100$
+	inc	R0
+	call	CheckPixGreen
+	beq	100$
+	add	#6, R1
+	sub	#5, R0
+	call	CheckPixGreen
+	beq	100$
+	add	#11., R0
+	call	CheckPixGreen
+	beq	100$
+99$:	return
+100$:	inc	PlaneStatus
+	return
+
+
+; check green at pixel's X, Y
+; R0 - X, R1 - Y
+; return Z=1 - have it
+CheckPixGreen:
+	mov	R1, R5
+	add	ScrollY, R5
+	swab	R5
+	clrb	R5
+	ror	R5
+	ror	R5
+	add	#C_VADDR, R5
+	mov	R0, R4
+	asr	R4
+	asr	R4
+	asr	R4
+	asl	R4
+	add	R4, R5
+	cmp	(R5), #^B1010101010101010
+	return
 
 
 ; put object's coords in a table
