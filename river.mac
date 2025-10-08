@@ -84,6 +84,7 @@ MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGa
 
 ; menu prepare
 MainMenuInit:
+
 	inc	CurrentMode
 	return
 
@@ -332,13 +333,29 @@ RotateOne:
 PrepFirstLine:
 	; draw normal banks and river
 	mov	#^B1010101010101010, R4		; color = green
-	tst	BloCnt				; need to draw road?
+	mov	FirstLineAddr, R5
+	; draw road if in block 0
+	tst	BloCnt
 	bne	10$
 	mov	BlockY, R4
 	asl	R4
-	mov	RoadCo(R4), R4			; get road color
-10$:	mov	FirstLineAddr, R5
-	; draw left bank (R4 - road color if needed)
+	mov	RoadCo(R4), R1
+	mov	BridgeCo(R4), R2
+	; draw road 
+	mov	#6., R3
+	mov	R1, (R5)+
+	mov	R1, (R5)+
+	sob	R3, .-4
+	; draw bridge or just water
+	cmp	CurrentMode, #C_MODE_PREPARE
+	bhi	02$
+	mov	#^B0101010101010101, R2
+02$:	mov	R2, (R5)+
+	mov	R2, (R5)+
+	mov	R2, (R5)+
+	mov	R2, (R5)+
+	br	20$
+10$:	; draw left bank (R4 - road color if needed)
 	movb	bBlEnd1, R3
 	mov	R3, R2	
 	mov	R4, (R5)+
@@ -476,20 +493,26 @@ DrawObjects:
 DrawOL:	.word	RetAdr, DrawExplo, RetAdr, RetAdr, RetAdr, DrawShip, DrawHeli, DrawBoat, RetAdr
 
 ; draw object explosion proc table
-DexpOL:	.word	RetAdr, RetAdr, RetAdr, RetAdr, DrawMineExp, DrawShipExp, DrawHeliExp, DrawBoatExp, RetAdr
+DexpOL:	.word	RetAdr, RetAdr, RetAdr, RetAdr, DrawMineExp, DrawShipExp, DrawHeliExp, DrawBoatExp, DrawBridgeExp
 
 ; (01) draw explosion
 ; R0 - block addr
 DrawExplo:
-	movb	1(R0), R5
-	asl	R5
-	jmp	@DexpOL(R5)
+	; draw only on even animation #
+	movb	6(R0), R5
+	bit	#1, R5
+	bne	99$
+	asr	R5				; animation # / 2
+	movb	1(R0), R1
+	asl	R1
+	jmp	@DexpOL(R1)
+99$:	return
 
 
-; explosion animation number (x2)
-; TODO: too much bytes for simple animation, cut them at least in half
-;			0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-ExpAniNum:	.byte	0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 4
+; explosion animation number (/2)
+;			0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+ExpAniNum:	.byte	0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 4
+		.even
 ExpAniMine:	.word	WCP41, WCP42, WCPBLU
 ExpAniHeli:	.word	WSPL10, WSPL11, 0
 ExpAniShip:	.word	WSPL12, WSPL13, 0
@@ -497,16 +520,16 @@ ExpAniPlane:	.word	WSPT05, WSPT06, 0
 
 ; (04) draw mine explosion
 ; R0 - block addr
+; R5 - explosion animation # / 2
 DrawMineExp:
-	mov	2(R0), R1		; X coord
+	mov	2(R0), R1			; X coord
 	clr	R2
-	bisb	4(R0), R2		; Y line
-	movb	6(R0), R5
+	bisb	4(R0), R2			; Y line
 	movb	ExpAniNum(R5), R5
 	mov	ExpAniMine(R5), R4
 	; get vaddr
 	mov	R2, R5
-	incb	R5			; (!) NEED THIS
+	incb	R5				; (!) NEED THIS
 	swab	R5
 	ror	R5
 	ror	R5
@@ -514,23 +537,23 @@ DrawMineExp:
 	asr	R1
 	asr	R1
 	asr	R1
-	asl	R1			; +X
-	add	R1, R5			; vaddr -> R5
+	asl	R1				; +X
+	add	R1, R5				; vaddr -> R5
 	; draw 2 words x 16 lines
 	mov	#9., R3
 	; check if block-0
 	cmp	R0, #Block0
 	bhi	10$
 	; block-0 must check for need to draw
-2$:	cmp	R2, ScrollY		; need to draw?
+2$:	cmp	R2, ScrollY			; need to draw?
 	blt	3$
-	mov	(R4)+, (R5)+		; draw line
+	mov	(R4)+, (R5)+			; draw line
 	mov	(R4)+, (R5)
 	add	#C_SCRWID-2, R5
 	inc	R2
 	sob	R3, 2$
 	return
-3$:	add	#4., R4			; next line
+3$:	add	#4., R4				; next line
 	add	#C_SCRWID, R5
 	inc	R2
 	sob	R3, 2$
@@ -539,7 +562,7 @@ DrawMineExp:
 	cmp	R0, #Block8
 	bhis	20$
 	; blocks 1..7 are drawing fully
-12$:	mov	(R4)+, (R5)+		; draw line
+12$:	mov	(R4)+, (R5)+			; draw line
 	mov	(R4)+, (R5)
 	add	#C_SCRWID-2, R5
 	sob	R3, 12$
@@ -644,12 +667,12 @@ DrawShipUniv1:
 
 ; (05) draw ship explosion
 ; R0 - block addr
+; R5 - explosion animation # / 2
 DrawShipExp:
 	mov	2(R0), R1			; X coord
 	clr	R2
 	bisb	4(R0), R2			; Y line
 	; get spr addr
-	movb	6(R0), R5			; explosion animation #
 	movb	ExpAniNum(R5), R5		; .. to word
 	mov	ExpAniShip(R5), R4		; .. to table addr
 	beq	10$
@@ -746,14 +769,14 @@ HeliHeight =: .+2
 
 ; (06) draw helicopter explosion
 ; R0 - block addr
+; R5 - explosion animation # / 2
 DrawHeliExp:
 	mov	#10., HeliHeight
 DrawHeliExp1:
-	mov	2(R0), R1		; X coord
+	mov	2(R0), R1			; X coord
 	clr	R2
-	bisb	4(R0), R2		; Y line
+	bisb	4(R0), R2			; Y line
 	; get spr addr
-	movb	6(R0), R5			; explosion animation #
 	movb	ExpAniNum(R5), R5		; .. to word
 	mov	ExpAniHeli(R5), R4		; .. to table addr
 	beq	10$
@@ -781,6 +804,7 @@ DrawBoat:
 
 ; (07) draw boat explosion
 ; R0 - block addr
+; R5 - explosion animation # / 2
 DrawBoatExp:
 	mov	#6., HeliHeight
 	br	DrawHeliExp1
@@ -813,6 +837,7 @@ DrawPlane:
 	beq	16$
 	cmp	R5, #30.			; explosion # exceeding limit?
 	bhi	99$				; yes - exit, not drawing
+	asr	R5				; /2 - explosions are 0..16
 	movb	ExpAniNum(R5), R5
 	mov	ExpAniPlane(R5), R5
 	bic	#^B1111111111111001, R0
@@ -953,6 +978,106 @@ MissileVaddr =: .
 99$:	return
 
 
+; draw bridge explosion
+; R0 - block #
+; R5 - explosion animation # / 2
+DrawBridgeExp:
+	; at #0 and #16. animations - draw blue water
+	tstb	R5
+	beq	100$
+	cmpb	R5, #16.
+	beq	100$
+	; else draw 2 ship explosions
+	mov	#12.*8.+4, R1			; X
+	clr	R2
+	bisb	4(R0), R2			; Y line
+	inc	R2
+	inc	R2				; adjust Y + 2
+	movb	ExpAniNum(R5), R5		; .. to word
+	mov	ExpAniShip(R5), R4		; .. to table addr
+	mov	R1, R5
+	bic	#^B1111111111111001, R5		; X fine / 2 * 2
+	add	R5, R4
+	mov	(R4), R4			; R4 - sprite addr
+	mov	R0, -(SP)
+	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R4, -(SP)
+	call	DrawShipUniv1
+	mov	(SP)+, R4
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	add	#12., R2
+	add	#24., R1
+	jmp	DrawShipUniv1
+	; return
+100$:	; draw blue water 
+	mov	#^B0101010101010101, R4
+	clr	R5
+	bisb	4(R0), R5			; Y-line of vaddr
+	swab	R5
+	ror	R5
+	ror	R5
+	add	#C_VADDR, R5
+	add	#24., R5			; R5 - vaddr
+	mov	#24., R3			; R3 <- DY = 24
+	; check if block-8
+	cmp	R0, #Block8
+	bhis	130$
+	; if block-0
+	cmp	R0, #Block0
+	beq	120$
+	; blocks 1..7
+110$:	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)
+	add	#C_SCRWID-14., R5
+	sob	R3, 110$
+	return
+	; block 0
+120$:	cmp	R2, ScrollY			; need to draw?
+	blt	124$
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)
+	add	#C_SCRWID-14., R5
+	inc	R2
+	sob	R3, 120$
+	return
+124$:	add	#C_SCRWID, R5
+	inc	R2
+	sob	R3, 120$
+	return
+130$:	; block 8
+	mov	ScrollY, R0
+	dec	R0
+134$:	cmp	R2, R0
+	bge	190$
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)+
+	mov	R4, (R5)
+	add	#C_SCRWID-14., R5
+	inc	R2
+	sob	R3, 134$
+190$:	return	
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // Making blocks
 ; //////////////////////////////////////////////////////////////////////////////
@@ -987,9 +1112,9 @@ MakeBlock:
 	mov	#Block0, R5
 	movb	#08., (R5)+			; 08. - bridge
 	clrb	(R5)+				; direction (doesn't matter)
-	mov	#12., (R5)+			; bridge X/8
+	mov	#12.*8., (R5)+			; bridge X
 	mov	ScrollY, R0
-	sub	#24., R0
+	sub	#27., R0
 	movb	R0, (R5)+			; bridge Y (line number)
 	clrb	(R5)+				; moving = 0
 	clrb	(R5)+				; animation counter
@@ -1323,10 +1448,10 @@ ProcObjects:
 ; R0 - block addr
 ProcExplo:
 	incb	6(R0)
-	cmpb	6(R0), #31.		; max animation for explosion (0..31)
-	blos	90$
-	clrb	(R0)			; delete object
-90$:	return
+	cmpb	6(R0), #32.			; max animation for explosion
+	blos	99$
+	clrb	(R0)				; delete object
+99$:	return
 
 
 ; (05) ship processing
@@ -1510,7 +1635,6 @@ ProcMissile:
 	cmp	MissileY, #6.
 	bhi	99$
 	; remove missile 
-	call	RemoveMissile
 	clr	MissileX
 99$:	return
 
@@ -1547,7 +1671,6 @@ MissCollision:
 	bcs	90$				; C=1 - no intersection
 	; remove rocket
 	clr	MissileX
-	call	RemoveMissile
 	; blow object then
 	mov	(SP), R0
 	movb	(R0), R1
@@ -1560,7 +1683,7 @@ MissCollision:
 
 ; check missile collision with ground
 MissGround:
-	tst	MissileX			; no missile?
+	tst	MissileX			; TODO: do we need that check of no missile?
 	beq	99$				; exit then
 	tst	MissileSaddr			; not drawn yet?
 	beq	99$				; also exit then
@@ -1620,10 +1743,12 @@ PlaneCollision:
 	movb	R1, (R0)+
 	clrb	4(R0)
 	; blow plane
-90$:	inc	PlaneStatus
-	cmp	PlaneStatus, #128.
-	blo	99$
-	inc	CurrentMode
+90$:
+; DEBUG
+;	inc	PlaneStatus
+;	cmp	PlaneStatus, #128.
+;	blo	99$
+;	inc	CurrentMode
 99$:	return
 
 
@@ -1650,7 +1775,7 @@ PlaneColGnd:
 	call	CheckPixGreen
 	beq	100$
 99$:	return
-100$:	inc	PlaneStatus
+100$:;	inc	PlaneStatus
 	return
 
 
@@ -1701,8 +1826,8 @@ ObjToRect:
 	mov	R0, (R5)+
 	return
 
-ObjDxTable:	.byte	0, 0, 0, 0, 15., 31., 15., 15., 0	; DX-1
-ObjDyTable:	.byte	0, 0, 0, 0, 08., 07., 09., 05., 0	; DY-1
+ObjDxTable:	.byte	0, 0, 0, 0, 15., 31., 15., 15., 63.	; DX-1
+ObjDyTable:	.byte	0, 0, 0, 0, 08., 07., 09., 05., 23.	; DY-1
 RectsBuf:	.blkw	4.					; X1 X2 Y1 Y2
 
 ; check rectsbuf intersection
@@ -2047,10 +2172,15 @@ FontData:
 FirstLinesBuf:	.blkb	2*C_SCRWID
 
 ; road colors
-ROADCO:	.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
-	.word	177777, 177777, 177777, 0, 0, 0, 0, 0, 0, 0, 0, ^B1010000010100000
-	.word	^B1010000010100000, 0, 0, 0, 0, 0, 0, 0, 0, 177777, 177777, 177777
-	.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
+RoadCo:		.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
+		.word	177777, 177777, 177777, 0, 0, 0, 0, 0, 0, 0, 0, ^B1010000010100000
+		.word	^B1010000010100000, 0, 0, 0, 0, 0, 0, 0, 0, 177777, 177777, 177777
+		.word	^B1010101010101010, ^B1010101010101010, ^B1010101010101010, ^B1010101010101010
+; bridge colors
+BridgeCo:	.word	^B0101010101010101, ^B0101010101010101, ^B0101010101010101, ^B0101010101010101
+		.word	177777, 177777, 177777, 0, 0, 0, 0, 0, 0, 0, 0, ^B1010000010100000
+		.word	^B1010000010100000, 0, 0, 0, 0, 0, 0, 0, 0, 177777, 177777, 177777
+		.word	^B0101010101010101, ^B0101010101010101, ^B0101010101010101, ^B0101010101010101
 
 ; helicopter explosion
 WSPL10:	.word	WSP100, WSP102, WSP104, WSP106
