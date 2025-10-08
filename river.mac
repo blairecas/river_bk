@@ -7,16 +7,25 @@
 
 Start:	mov	#1000, SP
 	mtps	#200
-	; TODO: backup ints
+	; backup ints
+	mov	@#4, -(SP)
+	mov	@#6, -(SP)
+	mov	@#60, -(SP)
+	mov	@#62, -(SP)
+	mov	@#100, -(SP)
+	mov	@#102, -(SP)
+	mov	@#274, -(SP)
+	mov	@#276, -(SP)
+	mov	SP, Stop+2
 	; set stop
 	mov	#Stop, @#4
 	mov	#200, @#6
 	; check for BK 0011(M)
-	clr	@#100					; use this addr as flag for BK 0010
+	clr	@#100				; use this addr as flag for BK 0010
 	cmpb	@#177717, #300
 	bne	10$
-	mov	#C_RAM_BANKS51, @#177716		; banks 5 1
-	clrb	@#177663				; vsync on, screen buf 5, palette 0
+	mov	#C_RAM_BANKS51, @#177716	; banks 5 1
+	clrb	@#177663			; vsync on, screen buf 5, palette 0
 	mov	#VsyInt, @#100
 	mov	#200, @#102
 	mov	#1200, TimerCycle
@@ -26,11 +35,11 @@ Start:	mov	#1000, SP
 	clr	@#62
 	mov	#Kbd274, @#274
 	clr	@#276
-	bic	#^B01000000, @#177660			; allow keyboard interrupt
+	bic	#^B01000000, @#177660		; allow keyboard interrupt
 	; set timer to screen refresh length
 TimerCycle =: .+2
 	mov	#740, @#177706
-	mov	#20, @#177712				; start timer, max speed
+	mov	#20, @#177712			; start timer, max speed
 
 	; set joystick bad bits
 	clr	@#177714			; turn off mouse?
@@ -41,30 +50,38 @@ TimerCycle =: .+2
 
 Stop:	; stop key goes here
 	mov	#1000, SP
-	mov	#200, @#177716				; speaker DC to low (not high?)
-	; clear ram/screen
+	mov	#200, @#177716			; speaker DC to low (not high?)
+	; clear ram
 	mov	#End, R0
 	mov	#100000-End/2, R3
 	clr	(R0)+
 	sob	R3, .-2
-	mov	#1330, @#177664				; roll screen to 0
+	mov	#1330, @#177664			; roll screen to 0
 	; all is set then
 	mtps	#0
 
 	; wait a bit, then finish init
 	clr	R0
 	sob	R0, .
-	tst	@#177662				; read keyboard reg just in case
-
-	; setup joystick
-	call	JoySetup
+	tst	@#177662			; read keyboard reg just in case
 
 	; go to main game cycle
 	clr	CurrentMode
 	br	MainCycle
 
 Exit:	; exit to somewhere
-	; TODO: restore vals
+	call	ClearScreen
+	mov	#1330, @#177664
+	; restore ints
+	mov	#1000, SP
+	mov	-(SP), @#4
+	mov	-(SP), @#6
+	mov	-(SP), @#60
+	mov	-(SP), @#62
+	mov	-(SP), @#100
+	mov	-(SP), @#102
+	mov	-(SP), @#274
+	mov	-(SP), @#276
 	halt
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -84,13 +101,73 @@ MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGa
 
 ; menu prepare
 MainMenuInit:
-
+	call	ClearScreen
+	; 1 - joy
+	call	PrintSp
+	.word	110.*C_SCRWID+14.+C_VADDR
+	.word	MsgMenu01
+	; 2 - vsync (only for BK0010)
+	call	PrintSp
+	.word	121.*C_SCRWID+14.+C_VADDR
+	.word	MsgMenu02
+	tst	@#100
+	beq	10$
+	mov	#121.*C_SCRWID+14.+C_VADDR, R1
+	mov	#30., R2
+	call	DarkenVaddr
+10$:	; 3 - sound
+	call	PrintSp
+	.word	132.*C_SCRWID+14.+C_VADDR
+	.word	MsgMenu03
+	; 0 - quit
+	call	PrintSp
+	.word	143.*C_SCRWID+14.+C_VADDR
+	.word	MsgMenu00
+	; space - start
+	call	PrintSp
+	.word	170.*C_SCRWID+7.+C_VADDR
+	.word	MsgMenuSt
+	; next 
 	inc	CurrentMode
 	return
 
 
 ; menu (wait key)
 MainMenu:
+	clr	PpuKeys
+	clr	UsedKeys
+10$:	call	RememberKeys
+	bit	#P_KEY_FIRE, UsedKeys
+	bne	90$
+	mov	KeyCur, R0
+	beq	10$
+	clr	KeyCur
+	; 1 - setup joystick
+	cmp	R0, #'1
+	bne	20$
+	call	JoySetup
+18$:	clr	CurrentMode
+	return
+20$:	; 2 - setup vsync (only for BK0010)
+	cmp	R0, #'2
+	bne	30$
+	tst	@#100				; check for BK0010
+	bne	10$
+	call	SetupTimer
+	br	18$
+30$:	; 3 - sound on/off
+	cmp	R0, #'3
+	bne	40$
+	;
+	; TODO: toggle sound
+	;
+40$:	; 0 - exit
+	cmp	R0, #'0
+	bne	10$
+	jmp	Exit
+90$:	; space - start game
+	clr	PpuKeys
+	clr	UsedKeys
 	inc	CurrentMode
 	return
 
@@ -238,7 +315,7 @@ PpuKeys =: .+2
 VsyncWait:
 	mov	#177710, R0
 TimerLine =: .+2
-	cmp	#000100, (R0)
+	cmp	#000360, (R0)
 	bne	.-4
 	inc	(PC)+
 FrameCount:	.word	0
@@ -253,7 +330,7 @@ ClearScreen:
 	mov	R1, (R0)+
 	tst	R0
 	bpl	10$
-
+	return
 
 ; set screen scroll pos to ScrollY
 SetScroll:
@@ -1885,6 +1962,21 @@ RandBridge:	.word	0			; for saving random at bridge spawn
 RandStore:	.word	0			; for storing bridge-spawned random
 
 
+; darken vaddr by bic some pixels (used in non-selectable music menu for BK0010)
+; R1 - vaddr, R2 - width
+; height is 8 lines
+DarkenVaddr:
+	mov	#C_SCRWID*2, R0
+10$:	mov	#4, R3
+20$:	bicb	#^B11001100, (R1)
+	bicb	#^B00110011, C_SCRWID(R1)
+	add	R0, R1
+	sob	R3, 20$
+	sub	#8.*C_SCRWID-1, R1
+	sob	R2, 10$
+	return
+
+
 ; mask words for coloring
 PriColorsTbl:	.word	^B1111111111111111, ^B1010101010101010, ^B0101010101010101, ^B0000000000000000
 
@@ -1909,6 +2001,18 @@ UnpFont:
 
 ; 112276 ROM font 0010 (from space) 133436 for 11M
 ; second ROM for 11M -> 100000 (+2 to bank #)
+
+; print string with addrs after call
+; call PrintSp
+; .word VAddr
+; .word MsgAddr
+PrintSp:
+	mov	(SP), R0
+	mov	(R0)+, PrintVaddr
+	mov	(R0)+, R0
+	call	Print
+	add	#4, (SP)
+	return
 
 ; print string
 ; R0 - string
@@ -1943,8 +2047,11 @@ FontDataAddr =: .+2
 	bisb	(R1)+, R4
 	call	UnpFont
 	bic	R3, R4
-	mov	R4, (R5)
-	add	#C_SCRWID, R5
+	movb	R4, (R5)+
+	swab	R4
+	movb	R4, (R5)+
+	; mov	R4, (R5)
+	add	#C_SCRWID-2, R5
 	sob	R2, 40$
 	sub	#C_SCRWID*7.-2, R5	; advance vaddr
 	br	10$
@@ -1957,8 +2064,57 @@ FontDataAddr =: .+2
 	return
 
 
+; 4x5 numbers (aligned by 8 bytes)
+SprNumbers45:
+	.byte	^B00111111, ^B00110011, ^B00110011, ^B00110011, ^B00111111, 0, 0, 0
+	.byte	^B00001100, ^B00001100, ^B00001100, ^B00001100, ^B00001100, 0, 0, 0
+	.byte	^B00111111, ^B00110000, ^B00111111, ^B00000011, ^B00111111, 0, 0, 0
+	.byte	^B00111111, ^B00110000, ^B00111100, ^B00110000, ^B00111111, 0, 0, 0
+	.byte	^B00110011, ^B00110011, ^B00111111, ^B00110000, ^B00110000, 0, 0, 0
+	.byte	^B00111111, ^B00000011, ^B00111111, ^B00110000, ^B00111111, 0, 0, 0
+	.byte	^B00111111, ^B00000011, ^B00111111, ^B00110011, ^B00111111, 0, 0, 0
+	.byte	^B00111111, ^B00110000, ^B00110000, ^B00110000, ^B00110000, 0, 0, 0
+	.byte	^B00111111, ^B00110011, ^B00111111, ^B00110011, ^B00111111, 0, 0, 0
+	.byte	^B00111111, ^B00110011, ^B00111111, ^B00110000, ^B00111111, 0, 0, 0 
+
+; print octal word (4x5 font), R0 - word, R5 - vaddr
+PrintOctal:
+	mov	#C_SCRWID, R2
+	mov	#6., R3
+	; 1st bit
+	clr	R1
+	br	22$
+20$:	; get number
+	clr	R1
+	asl	R0
+	rol	R1
+	asl	R0
+	rol	R1
+22$:	asl	R0
+	rol	R1	
+	; get spr addr
+	asl	R1
+	asl	R1
+	asl	R1
+	add	#SprNumbers45, R1
+	; put bits
+	movb	(R1)+, (R5)
+	add	R2, R5
+	movb	(R1)+, (R5)
+	add	R2, R5
+	movb	(R1)+, (R5)
+	add	R2, R5
+	movb	(R1)+, (R5)
+	add	R2, R5
+	movb	(R1)+, (R5)
+	sub	#C_SCRWID*4-1, R5
+	sob	R3, 20$
+	return	 
+
+
 ; setup joy redefine table (if user want so, doing that only once)
 JoySetup:
+	call	ClearScreen
 	mov	#10.*C_SCRWID+2+C_VADDR, PrintVaddr
 	mov	#MsgJoy000, R0
 	call	Print
@@ -2005,8 +2161,130 @@ SetJoyKey:
 	mov	#5, R3
 	mov	-(R5), -(R5)
 	sob	R3, .-2
+	clr	KeyCur
 	tst	(SP)+				; remove call
 	return					; return from routine above
+
+
+; setup vsync timer
+SetupTimer:
+	call	ClearScreen
+	mov	#10.*C_SCRWID+C_VADDR+1, PrintVaddr
+	mov	#MsgTime00, R0
+	call	Print
+	call	Print
+	add	#6.*C_SCRWID, PrintVaddr
+	call	Print
+	call	Print
+	; draw gauge
+	mov	#128.*C_SCRWID+1+C_VADDR, R0
+	mov	#31., R3
+10$:	movb	#^B01000000, (R0)+
+	movb	#^B00000001, (R0)+
+	sob	R3, 10$
+	; prepare
+	mov	#360, TimerLine
+	call	200$
+; adjust proc cycle
+100$:	mov	#177710, R0
+	cmp	TimerLine, (R0)
+	bne	.-4
+	; draw/remove sprite
+	call	300$
+	call	400$
+	; current timer
+	mov	@#177710, R5
+	; keys
+	call	RememberKeys
+	mov	#TKeysAdj, R4
+	mov	#4, R3
+110$:	bitb	(R4)+, UsedKeys
+	beq	120$
+	clr	PpuKeys
+	clr	UsedKeys
+	movb	(R4), R0
+	add	R0, TimerLine
+	call	200$
+	br	100$
+120$:	inc	R4
+	sob	R3, 110$
+	bit	#P_KEY_FIRE, UsedKeys
+	beq	100$
+	sub	#C_TIMER_ADJ, R5
+	bgt	130$
+	add	#740, R5
+130$:	mov	R5, TimerLine
+	call	ClearScreen
+	return
+; correct value and draw it
+200$:	mov	TimerLine, R0
+	cmp	R0, #4
+	bge	210$
+	mov	#4, R0
+210$:	cmp	R0, #734
+	ble	220$
+	mov	#734, R0
+220$:	mov	R0, TimerLine
+	mov	#108.*C_SCRWID+29.+C_VADDR, R5
+	call	PrintOctal
+	; draw line
+	mov	TimerLine, R0
+	mov	#^B0000101010100000, R1
+	asr	R0
+	asr	R0
+	asr	R0
+	bcc	230$
+	mov	#^B1010101000000000, R1
+230$:	add	#118.*C_SCRWID-1+C_VADDR, R0
+	mov	#8., R3
+240$:	clrb	(R0)+
+	clrb	(R0)+
+	movb	R1, (R0)+
+	swab	R1
+	movb	R1, (R0)+
+	swab	R1
+	clrb	(R0)+
+	clrb	(R0)+
+	add	#C_SCRWID-6, R0
+	sob	R3, 240$
+	return
+; draw sprite 
+300$:	mov	#WSP500, R0
+	mov	#200.*C_SCRWID+28.+C_VADDR, R1
+	mov	#8., R2
+	mov	#^B0101010101010101, R4
+	call	320$
+310$:	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)+
+	mov	(R0)+, (R1)
+	tst	(R0)+
+	add	#C_SCRWID-6., R1
+	sob	R2, 310$
+	mov	R4, (R1)+
+	mov	R4, (R1)+
+	mov	R4, (R1)+
+	mov	R4, (R1)
+	add	#C_SCRWID-6., R1
+320$:	mov	#^B0101010101010100, (R1)+
+	mov	R4, (R1)+
+	mov	R4, (R1)+
+	mov	#^B0001010101010101, (R1)
+	add	#C_SCRWID-6., R1
+	return
+; remove sprite
+400$:	mov	#200.*C_SCRWID+28.+C_VADDR, R1
+	clr	R0
+	mov	#11., R2
+410$:	mov	R0, (R1)+
+	mov	R0, (R1)+
+	mov	R0, (R1)+
+	mov	R0, (R1)
+	add	#C_SCRWID-6., R1
+	sob	R2, 410$
+	return
+
+TKeysAdj:	.byte	P_KEY_LEFT, -4, P_KEY_RIGHT, 4, P_KEY_UP, -20, P_KEY_DOWN, 20
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -2058,6 +2336,7 @@ JoyReTableD:	.word	P_KEY_DOWN,  P_KEY_DOWN
 JoyReTableL:	.word	P_KEY_LEFT,  P_KEY_LEFT
 JoyReTableF:	.word	P_KEY_FIRE,  P_KEY_FIRE
 JoyReTableEnd:
+
 MsgJoy000:	.asciz	<2>"JOYSTICK SETUP"
 MsgJoy001:	.asciz	<1>"PRESS ANY KEY TO USE DEFAULTS"
 MsgJoy002:	.asciz	<3>"PRESS UP"
@@ -2065,6 +2344,17 @@ MsgJoy003:	.asciz	<3>"PRESS RIGHT"
 MsgJoy004:	.asciz	<3>"PRESS DOWN"
 MsgJoy005:	.asciz	<3>"PRESS LEFT"
 MsgJoy006:	.asciz	<3>"PRESS FIRE"
+
+MsgMenu01:	.asciz	<2>"1"<1>" ; JOYSTICK SETUP"
+MsgMenu02:	.asciz	<2>"2"<1>" ; VSYNC SETUP"
+MsgMenu03:	.asciz	<2>"3"<1>" ; SOUND "<2>"ON"
+MsgMenu00:	.asciz	<3>"0"<1>" ; QUIT"
+MsgMenuSt:	.asciz	<1>"PRESS "<2>"SPACE"<1>">"<2>"FIRE"<1>" TO START"
+
+MsgTime00:	.asciz	<1>"FOR SETUP "<2>"VSYNC"<1>" TIMER ON BK0010"
+		.asciz	<1>"USE "<3>"ARROW"<1>" KEYS TO ADJUST SLIDER"
+		.asciz	<1>"PRESS  "<3>"SPACE"<1>" WHEN SHIP IS FULLY"
+		.asciz	<1>"VISIBLE AT THE BOTTOM"
 		.even
 
 
