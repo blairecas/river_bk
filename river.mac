@@ -24,7 +24,7 @@ Start:	mov	#1000, SP
 	clr	@#100				; use this addr as flag for BK 0010
 	cmpb	@#177717, #300
 	bne	10$
-	mov	#C_RAM_BANKS51, @#177716	; banks 5 1
+	mov	#C_RAM_BANKS54, @#177716	; banks 5 4 (andos standard bank 4 on 100000)
 	clrb	@#177663			; vsync on, screen buf 5, palette 0
 	mov	#VsyInt, @#100
 	mov	#200, @#102
@@ -48,7 +48,8 @@ TimerCycle =: .+2
 	bis	@#177714, JoyBadBits
 	sob	R0, .-6
 
-Stop:	; stop key goes here
+Stop:	; stop key goes here 
+	; (!) mutable SP addr
 	mov	#1000, SP
 	mov	#200, @#177716			; speaker DC to low (not high?)
 	; clear ram
@@ -73,7 +74,11 @@ Exit:	; exit to somewhere
 	call	ClearScreen
 	mov	#1330, @#177664
 	; restore ints
-	mov	#1000, SP
+	mtps	#200
+	tst	@#100
+	beq	10$
+	movb	#^B01000000, @#177663
+10$:	mov	#1000, SP
 	mov	-(SP), @#4
 	mov	-(SP), @#6
 	mov	-(SP), @#60
@@ -82,7 +87,15 @@ Exit:	; exit to somewhere
 	mov	-(SP), @#102
 	mov	-(SP), @#274
 	mov	-(SP), @#276
-	halt
+	mov	#100004, R0			; check 'standard' ROM at 100000
+	mov	-(R0), R1
+	add	-(R0), R1
+	cmp	R1, #167+254
+	beq	99$				; seems we have it
+	mov	@#177716, R0			; else go to reset addr
+	clrb	R0
+99$:	jmp	(R0)
+
 
 ; //////////////////////////////////////////////////////////////////////////////
 ; // Main
@@ -102,30 +115,43 @@ MainCycleTbl:	.word	MainMenuInit, MainMenu, MainInit, MainScrollInto, MainWaitGa
 ; menu prepare
 MainMenuInit:
 	call	ClearScreen
+	mov	#MenuData, R0
+	mov	#50.*C_SCRWID+C_VADDR, R1
+	call	DZX0
+	; line of
+	mov	#C_MENU_Y-7.*C_SCRWID+14.+C_VADDR, R0
+	call	BlueLine
 	; 1 - joy
 	call	PrintSp
-	.word	110.*C_SCRWID+14.+C_VADDR
+	.word	C_MENU_Y*C_SCRWID+14.+C_VADDR
 	.word	MsgMenu01
 	; 2 - vsync (only for BK0010)
 	call	PrintSp
-	.word	121.*C_SCRWID+14.+C_VADDR
+	.word	C_MENU_Y+11.*C_SCRWID+14.+C_VADDR
 	.word	MsgMenu02
 	tst	@#100
 	beq	10$
-	mov	#121.*C_SCRWID+14.+C_VADDR, R1
+	mov	#C_MENU_Y+11.*C_SCRWID+14.+C_VADDR, R1
 	mov	#30., R2
 	call	DarkenVaddr
 10$:	; 3 - sound
 	call	PrintSp
-	.word	132.*C_SCRWID+14.+C_VADDR
+	.word	C_MENU_Y+21.*C_SCRWID+14.+C_VADDR
 	.word	MsgMenu03
+	; 4 - debug
+	call	PrintSp
+	.word	C_MENU_Y+32.*C_SCRWID+14.+C_VADDR
+	.word	MsgMenu04
 	; 0 - quit
 	call	PrintSp
-	.word	143.*C_SCRWID+14.+C_VADDR
+	.word	C_MENU_Y+43.*C_SCRWID+14.+C_VADDR
 	.word	MsgMenu00
+	; line of
+	mov	#C_MENU_Y+56.*C_SCRWID+14.+C_VADDR, R0
+	call	BlueLine
 	; space - start
 	call	PrintSp
-	.word	170.*C_SCRWID+7.+C_VADDR
+	.word	C_MENU_Y+71.*C_SCRWID+7.+C_VADDR
 	.word	MsgMenuSt
 	; next 
 	inc	CurrentMode
@@ -158,10 +184,26 @@ MainMenu:
 30$:	; 3 - sound on/off
 	cmp	R0, #'3
 	bne	40$
-	;
-	; TODO: toggle sound
-	;
-40$:	; 0 - exit
+	mov	#C_MENU_Y+21.*C_SCRWID+34.+C_VADDR, PrintVaddr
+	mov	#MsgOn, R0
+SoundOn =: .+2
+	com	#177777
+	bne	32$
+	mov	#MsgOff, R0
+32$:	call	Print
+	return
+40$:	; 4 - debug on/off
+	cmp	R0, #'4
+	bne	50$
+	mov	#C_MENU_Y+32.*C_SCRWID+34.+C_VADDR, PrintVaddr
+	mov	#MsgOn, R0
+DebugOn =: .+2
+	com	#000000
+	bne	42$
+	mov	#MsgOff, R0
+42$:	call	Print
+	return
+50$:	; 0 - exit
 	cmp	R0, #'0
 	bne	10$
 	jmp	Exit
@@ -1820,12 +1862,12 @@ PlaneCollision:
 	movb	R1, (R0)+
 	clrb	4(R0)
 	; blow plane
-90$:
-; DEBUG
-;	inc	PlaneStatus
-;	cmp	PlaneStatus, #128.
-;	blo	99$
-;	inc	CurrentMode
+90$:	tst	DebugOn
+	bne	99$
+	inc	PlaneStatus
+	cmp	PlaneStatus, #128.
+	blo	99$
+	inc	CurrentMode
 99$:	return
 
 
@@ -1852,7 +1894,9 @@ PlaneColGnd:
 	call	CheckPixGreen
 	beq	100$
 99$:	return
-100$:;	inc	PlaneStatus
+100$:	tst	DebugOn
+	bne	99$
+	inc	PlaneStatus
 	return
 
 
@@ -2183,11 +2227,11 @@ SetupTimer:
 	movb	#^B00000001, (R0)+
 	sob	R3, 10$
 	; prepare
-	mov	#360, TimerLine
 	call	200$
 ; adjust proc cycle
 100$:	mov	#177710, R0
-	cmp	TimerLine, (R0)
+TimerLineSet =: .+2
+	cmp	#000360, (R0)
 	bne	.-4
 	; draw/remove sprite
 	call	300$
@@ -2203,7 +2247,7 @@ SetupTimer:
 	clr	PpuKeys
 	clr	UsedKeys
 	movb	(R4), R0
-	add	R0, TimerLine
+	add	R0, TimerLineSet
 	call	200$
 	br	100$
 120$:	inc	R4
@@ -2217,18 +2261,18 @@ SetupTimer:
 	call	ClearScreen
 	return
 ; correct value and draw it
-200$:	mov	TimerLine, R0
+200$:	mov	TimerLineSet, R0
 	cmp	R0, #4
 	bge	210$
 	mov	#4, R0
 210$:	cmp	R0, #734
 	ble	220$
 	mov	#734, R0
-220$:	mov	R0, TimerLine
+220$:	mov	R0, TimerLineSet
 	mov	#108.*C_SCRWID+29.+C_VADDR, R5
 	call	PrintOctal
 	; draw line
-	mov	TimerLine, R0
+	mov	TimerLineSet, R0
 	mov	#^B0000101010100000, R1
 	asr	R0
 	asr	R0
@@ -2285,6 +2329,78 @@ SetupTimer:
 	return
 
 TKeysAdj:	.byte	P_KEY_LEFT, -4, P_KEY_RIGHT, 4, P_KEY_UP, -20, P_KEY_DOWN, 20
+
+
+; just blue line
+; R0 - vaddr
+BlueLine:
+	mov	#^B0100010001000100, R1
+	mov	#18., R2
+	mov	R1, (R0)+
+	sob	R2, .-2
+	return
+
+
+; ZX0 v2.2 standart unpacker
+; original ZX0 encoder/decoder (c) Einar Saukas & Urusergi
+; PDP11 version by reddie, 17-sept-2025 (bugfixed)
+; PDP11 version takes 94 bytes
+; usage:
+; R0 = source data addr (compressed)
+; R1 = addr for decompressing data
+; out:
+; R0 = next byte after the source data
+; R1 = next byte after the decompressed data
+; registers used: all (R0-R5)
+
+DZX0:	CLR	R2
+	MOVB	#200,R3
+	SXT	R5
+DZX0_LITERALS:
+	CALL	DZX0_ELIAS
+	MOVB	(R0)+,(R1)+
+	SOB	R2,.-2
+	ASLB	R3
+	BCS	DZX0_NEW_OFFSET
+	CALL	DZX0_ELIAS
+DZX0_COPY:
+	MOV	R1,R4
+	ADD	R5,R4
+	MOVB	(R4)+,(R1)+
+	SOB	R2,.-2
+	ASLB	R3
+	BCC	DZX0_LITERALS
+DZX0_NEW_OFFSET:
+	BISB	#376,R2
+	CALL	DZX0_ELIAS_LOOP
+	INCB	R2
+	BNE	.+4
+DZX0_EXIT:
+	RETURN
+	SWAB	R2
+	CLRB	R2
+	MOV	R2,R5
+	BISB	(R0)+,R5
+	SEC
+	ROR	R5
+	MOV	#1,R2
+	BCS	.+6
+	CALL	DZX0_ELIAS_BACKTRACK
+	INC	R2
+	BR	DZX0_COPY
+DZX0_ELIAS:
+	INCB	R2
+DZX0_ELIAS_LOOP:
+	ASLB	R3
+	BNE	DZX0_ELIAS_SKIP
+	MOVB	(R0)+,R3
+	ROLB	R3
+DZX0_ELIAS_SKIP:
+	BCS	DZX0_EXIT
+DZX0_ELIAS_BACKTRACK:
+	ASLB	R3
+	ROL	R2
+	BR	DZX0_ELIAS_LOOP
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -2347,7 +2463,10 @@ MsgJoy006:	.asciz	<3>"PRESS FIRE"
 
 MsgMenu01:	.asciz	<2>"1"<1>" ; JOYSTICK SETUP"
 MsgMenu02:	.asciz	<2>"2"<1>" ; VSYNC SETUP"
-MsgMenu03:	.asciz	<2>"3"<1>" ; SOUND "<2>"ON"
+MsgMenu03:	.ascii	<2>"3"<1>" ; SOUND "
+MsgOn:		.asciz	<2>"ON "
+MsgOff:		.asciz	<1>"OFF"
+MsgMenu04:	.asciz	<2>"4"<1>" ; DEBUG OFF"
 MsgMenu00:	.asciz	<3>"0"<1>" ; QUIT"
 MsgMenuSt:	.asciz	<1>"PRESS "<2>"SPACE"<1>">"<2>"FIRE"<1>" TO START"
 
@@ -3053,6 +3172,252 @@ WSP066:	.word	0, 36000, 0, 0, 0, 0, 0, 74
 	.word	170000, 360, 0, 360, 0, 0, 0, 0
 	.word	140000, 140003, 3, 0, 1700, 1700, 0, 170000
 	.word	0, 0, 360, 0, 0, 0, 17
+
+; menu data compressed
+MenuData:
+@packstart
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	25, 0, 100, 125, 125, 124, 125, 1
+	.byte	0, 0, 0, 125, 125, 121, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 1
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	0, 0, 0, 0, 0, 125, 125, 1
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 5, 0, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 0, 100, 125, 125, 124, 125, 1
+	.byte	0, 0, 0, 125, 125, 121, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 5
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	1, 0, 0, 0, 0, 125, 125, 1
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 0, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 1, 100, 125, 125, 124, 125, 5
+	.byte	0, 0, 100, 125, 125, 120, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 25
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	5, 0, 0, 0, 100, 125, 125, 5
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 5, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 5, 100, 125, 125, 120, 125, 5
+	.byte	0, 0, 100, 125, 125, 120, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 125
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	25, 0, 0, 0, 100, 125, 125, 5
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 25, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 25, 100, 125, 125, 120, 125, 25
+	.byte	0, 0, 120, 125, 25, 120, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 125
+	.byte	1, 0, 0, 124, 125, 125, 125, 125
+	.byte	125, 0, 0, 0, 120, 125, 125, 25
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 125, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 25, 100, 125, 125, 100, 125, 25
+	.byte	0, 0, 120, 125, 25, 120, 125, 125
+	.byte	125, 125, 120, 125, 125, 125, 125, 125
+	.byte	1, 0, 0, 124, 125, 125, 125, 125
+	.byte	125, 0, 0, 0, 120, 125, 125, 25
+	.byte	0, 0, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 125, 1, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 120
+	.byte	125, 125, 100, 125, 125, 100, 125, 125
+	.byte	0, 0, 124, 125, 5, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 125, 125
+	.byte	5, 0, 0, 124, 125, 1, 100, 125
+	.byte	125, 1, 0, 0, 120, 125, 125, 25
+	.byte	0, 0, 124, 125, 1, 125, 125, 1
+	.byte	120, 125, 125, 5, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 100, 125, 125, 100, 125, 125
+	.byte	0, 0, 124, 125, 5, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 124, 125
+	.byte	5, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 1, 0, 0, 124, 125, 125, 125
+	.byte	0, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 125, 125, 5, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 100, 125, 125, 0, 125, 125
+	.byte	1, 0, 125, 125, 5, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 124, 125
+	.byte	5, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 1, 0, 0, 124, 125, 125, 125
+	.byte	0, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 124, 125, 25, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 100, 125, 125, 0, 125, 125
+	.byte	1, 0, 125, 125, 1, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 124, 125
+	.byte	5, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 1, 0, 0, 125, 125, 125, 125
+	.byte	0, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 120, 125, 25, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 100, 125, 125, 0, 125, 125
+	.byte	1, 0, 125, 125, 1, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 124, 125
+	.byte	5, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 1, 0, 0, 125, 125, 125, 125
+	.byte	1, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 100, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 100, 125, 125, 0, 124, 125
+	.byte	5, 100, 125, 125, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 0, 124, 125
+	.byte	5, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 1, 0, 100, 125, 125, 125, 125
+	.byte	1, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 100, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 120
+	.byte	125, 125, 100, 125, 125, 0, 124, 125
+	.byte	5, 100, 125, 125, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 5, 0, 125, 125
+	.byte	5, 0, 0, 124, 125, 1, 100, 125
+	.byte	125, 1, 0, 100, 125, 125, 124, 125
+	.byte	5, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 25, 100, 125, 125, 0, 124, 125
+	.byte	25, 120, 125, 25, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 125, 125, 125, 125
+	.byte	1, 0, 0, 124, 125, 125, 125, 125
+	.byte	125, 0, 0, 100, 125, 125, 124, 125
+	.byte	5, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 25, 100, 125, 125, 0, 120, 125
+	.byte	25, 120, 125, 25, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 125, 125, 125, 125
+	.byte	1, 0, 0, 124, 125, 125, 125, 125
+	.byte	125, 0, 0, 120, 125, 25, 120, 125
+	.byte	5, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 5, 100, 125, 125, 0, 120, 125
+	.byte	125, 124, 125, 25, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 125, 125, 125, 125
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	25, 0, 0, 120, 125, 25, 120, 125
+	.byte	25, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	125, 1, 100, 125, 125, 0, 100, 125
+	.byte	125, 124, 125, 5, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 125, 125, 125, 25
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	5, 0, 0, 124, 125, 5, 100, 125
+	.byte	25, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	25, 0, 100, 125, 125, 0, 100, 125
+	.byte	125, 125, 125, 5, 0, 120, 125, 125
+	.byte	125, 25, 120, 125, 125, 125, 125, 1
+	.byte	0, 0, 0, 124, 125, 125, 125, 125
+	.byte	0, 0, 0, 124, 125, 5, 100, 125
+	.byte	25, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 0, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	5, 0, 100, 125, 125, 0, 0, 125
+	.byte	125, 125, 125, 1, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 125, 125, 125, 0
+	.byte	0, 0, 0, 124, 125, 125, 125, 25
+	.byte	0, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 100, 125, 125, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 125, 125
+	.byte	5, 0, 100, 125, 125, 0, 0, 125
+	.byte	125, 125, 125, 1, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 125, 125, 125, 0
+	.byte	0, 0, 0, 124, 125, 125, 125, 25
+	.byte	0, 0, 0, 125, 125, 125, 125, 125
+	.byte	125, 0, 124, 125, 1, 125, 125, 1
+	.byte	0, 100, 125, 25, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 120, 125
+	.byte	25, 0, 100, 125, 125, 0, 0, 124
+	.byte	125, 125, 125, 0, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 125, 125, 1
+	.byte	0, 0, 0, 124, 125, 101, 125, 125
+	.byte	0, 0, 0, 125, 125, 125, 125, 125
+	.byte	125, 1, 124, 125, 1, 125, 125, 1
+	.byte	0, 120, 125, 25, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 120, 125
+	.byte	125, 0, 100, 125, 125, 0, 0, 124
+	.byte	125, 125, 125, 0, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 125, 125, 5
+	.byte	0, 0, 0, 124, 125, 101, 125, 125
+	.byte	1, 0, 100, 125, 125, 125, 125, 125
+	.byte	125, 1, 124, 125, 1, 125, 125, 1
+	.byte	0, 124, 125, 25, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 100, 125
+	.byte	125, 0, 100, 125, 125, 0, 0, 124
+	.byte	125, 125, 25, 0, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 124, 125, 5
+	.byte	0, 0, 0, 124, 125, 1, 125, 125
+	.byte	1, 0, 100, 125, 125, 125, 125, 125
+	.byte	125, 1, 124, 125, 1, 125, 125, 1
+	.byte	0, 125, 125, 5, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 100, 125
+	.byte	125, 1, 100, 125, 125, 0, 0, 120
+	.byte	125, 125, 25, 0, 0, 120, 125, 5
+	.byte	0, 0, 120, 125, 5, 124, 125, 25
+	.byte	0, 0, 0, 124, 125, 1, 125, 125
+	.byte	5, 0, 120, 125, 125, 125, 125, 125
+	.byte	125, 5, 124, 125, 1, 125, 125, 1
+	.byte	120, 125, 125, 5, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 125
+	.byte	125, 5, 100, 125, 125, 0, 0, 120
+	.byte	125, 125, 25, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 120, 125, 125
+	.byte	0, 0, 0, 124, 125, 1, 124, 125
+	.byte	25, 0, 120, 125, 125, 125, 125, 125
+	.byte	125, 5, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 125, 1, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 124
+	.byte	125, 25, 100, 125, 125, 0, 0, 100
+	.byte	125, 125, 5, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 100, 125, 125
+	.byte	1, 0, 0, 124, 125, 1, 120, 125
+	.byte	125, 0, 120, 125, 25, 0, 0, 124
+	.byte	125, 5, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 125, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 124
+	.byte	125, 125, 100, 125, 125, 0, 0, 100
+	.byte	125, 125, 5, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 100, 125, 125
+	.byte	5, 0, 0, 124, 125, 1, 120, 125
+	.byte	125, 1, 124, 125, 25, 0, 0, 120
+	.byte	125, 25, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 25, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 120
+	.byte	125, 125, 100, 125, 125, 0, 0, 0
+	.byte	125, 125, 1, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 0, 125, 125
+	.byte	5, 0, 0, 124, 125, 1, 100, 125
+	.byte	125, 1, 124, 125, 5, 0, 0, 120
+	.byte	125, 25, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 1, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 100
+	.byte	125, 125, 101, 125, 125, 0, 0, 0
+	.byte	125, 125, 1, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 0, 124, 125
+	.byte	25, 0, 0, 124, 125, 1, 0, 125
+	.byte	125, 5, 125, 125, 5, 0, 0, 100
+	.byte	125, 125, 124, 125, 1, 125, 125, 125
+	.byte	125, 125, 0, 0, 0, 0, 0, 0
+	.byte	0, 0, 0, 0, 125, 125, 0, 0
+	.byte	125, 125, 105, 125, 125, 0, 0, 0
+	.byte	124, 125, 0, 0, 0, 120, 125, 125
+	.byte	125, 125, 120, 125, 5, 0, 120, 125
+	.byte	125, 0, 0, 124, 125, 1, 0, 124
+	.byte	125, 25, 125, 125, 1, 0, 0, 100
+	.byte	125, 125, 124, 125, 1, 125, 125, 125
+	.byte	125, 5, 0, 0, 0, 0, 0, 0
+@packend
+
 
 End:
 	.end	Start
