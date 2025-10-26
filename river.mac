@@ -183,6 +183,7 @@ MainMenu:
 	; 1 - setup joystick
 	cmp	R0, #'1
 	bne	20$
+	call	SoundSimple
 	call	JoySetup
 18$:	clr	CurrentMode
 	return
@@ -191,11 +192,13 @@ MainMenu:
 	bne	30$
 	tst	@#100				; check for BK0010
 	bne	10$
+	call	SoundSimple
 	call	SetupTimer
 	br	18$
 30$:	; 3 - sound on/off
 	cmp	R0, #'3
 	bne	40$
+	call	SoundSimple
 	mov	#C_MENU_Y+21.*C_SCRWID+34.+C_VADDR, PrintVaddr
 	mov	#MsgOn, R0
 SoundOn =: .+2
@@ -207,6 +210,7 @@ SoundOn =: .+2
 40$:	; 4 - debug on/off
 	cmp	R0, #'4
 	bne	50$
+	call	SoundSimple
 	mov	#C_MENU_Y+32.*C_SCRWID+34.+C_VADDR, PrintVaddr
 	mov	#MsgOn, R0
 DebugOn =: .+2
@@ -283,6 +287,7 @@ MainGame:
 	call	PlaneCollision			; check plane collision
 	call	MissCollision			; check missile collision with objects
 	call	MissGround			; check missile collision with ground
+	call	SoundTone			; missile sound tone
 	; movb	#1, @#177663
 	return
 
@@ -2353,6 +2358,54 @@ BlueLine:
 	return
 
 
+; simple sound
+SoundSimple:
+	tst	SoundOn
+	beq	99$
+	mov	R0, -(SP)
+	mov	#SndMenu, R0
+	clr	R3
+	mov	#320, R4			; high speaker
+	mov	#220, R5			; low speaker
+30$:	bisb	(R0)+, R3
+	beq	90$				; end of sound
+	asr	R3
+	asr	R3
+	mov	R4, @#177716
+	sob	R3, .
+	bisb	(R0)+, R3
+	beq	90$				; end of sound
+	asr	R3
+	asr	R3
+	mov	R5, @#177716
+	sob	R3, .
+	br	30$
+90$:	mov	(SP)+, R0
+99$:	return
+
+
+; play a bit of tone flying missile
+SoundTone:
+	tst	SoundOn
+	beq	99$
+	tst	MissileX
+	beq	99$
+	mov	MissileY, R0
+	asr	R0
+	asr	R0
+	asr	R0
+	swab	R0
+	mov	#60., R3
+10$:	add	R0, #000000
+	bpl	20$
+	mov	#300, @#177716
+	sob	R3, 10$
+	return
+20$:	mov	#200, @#177716
+	sob	R3, 10$
+99$:	return
+
+
 ; ZX0 v2.2 standart unpacker
 ; original ZX0 encoder/decoder (c) Einar Saukas & Urusergi
 ; PDP11 version by reddie, 17-sept-2025 (bugfixed)
@@ -2479,6 +2532,15 @@ MsgTime00:	.asciz	<1>"FOR SETUP "<2>"VSYNC"<1>" TIMER ON BK0010"
 		.asciz	<1>"VISIBLE AT THE BOTTOM"
 		.even
 
+.radix 10
+SndMenu:	.byte	194, 079, 037, 026, 075, 025, 210, 041
+		.byte	037, 076, 026, 052
+		.byte	0
+;		.byte	216, 184, 192, 184, 184, 192, 184, 192, 176, 200, 176, 208
+;		.byte	168, 216, 160, 224
+;		.byte	0
+		.even
+.radix 8
 
 ; blocks table (8 objects)
 ; +00 object id (0-nothing, 1..2 - explosions, 3-house, 4-mine, 5-ship, 6-helicopter, 7-boat, 8-bridge)

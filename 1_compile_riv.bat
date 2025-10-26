@@ -13,6 +13,10 @@ if %ERRORLEVEL% NEQ 0 ( exit /b )
 php -f ../scripts/lst2bin.php _%NAME%.lst ./release/%NAME%.bin bbk
 if %ERRORLEVEL% NEQ 0 ( exit /b )
 
+rem make .wav
+php -f ../scripts/bin2wav.php ./release/%NAME%.bin
+if %ERRORLEVEL% NEQ 0 ( exit /b )
+
 del _%NAME%.mac
 rem del _%NAME%.lst
 
