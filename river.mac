@@ -170,6 +170,17 @@ MainMenuInit:
 	return
 
 
+ ; /////////////////////////////////////////////////////////////////////////////
+ ; 1770-2000 addr hole for 11M tape loader after Basic
+ ; /////////////////////////////////////////////////////////////////////////////
+
+	.if LT 1770-.
+	.error 1770-2000 hole overlapped
+	.endc
+
+	.=2000
+
+
 ; menu (wait key)
 MainMenu:
 	clr	PpuKeys
@@ -231,7 +242,8 @@ DebugOn =: .+2
 
 
 ; first stage - init
-MainInit:	
+MainInit:
+	clr	NoiseAddr			; stop noise if any
 	clr	Level
 	clr	SLevel				; stored level (will continue from it after crash)
 	mov	#126341, RandLo			; reset random
@@ -1813,6 +1825,7 @@ MissCollision:
 	movb	#1, (R0)+
 	movb	R1, (R0)+
 	clrb	4(R0)
+	call	SetNoise			; sound -> noise
 90$:	tst	(SP)+
 99$:	return
 
@@ -1878,6 +1891,7 @@ PlaneCollision:
 	movb	#1, (R0)+
 	movb	R1, (R0)+
 	clrb	4(R0)
+	call	SetNoise			; sound -> noise
 	; blow plane
 90$:	tst	DebugOn
 	bne	99$
@@ -1913,6 +1927,7 @@ PlaneColGnd:
 99$:	return
 100$:	tst	DebugOn
 	bne	99$
+	call	SetNoise			; sound -> noise
 	inc	PlaneStatus
 	return
 
@@ -2385,10 +2400,16 @@ SoundSimple:
 
 
 ; play a bit of tone flying missile
+; or boom noise
 SoundTone:
-	tst	SoundOn
+	tst	SoundOn				; no sound?
 	beq	99$
-	tst	MissileX
+	mov	NoiseAddr, R5			; play noise?
+	bne	100$
+	tst	MissileX			; have a missile?
+	beq	99$
+	; missile - every 2nd frame
+	bit	#1, FrameCount
 	beq	99$
 	mov	MissileY, R0
 	asr	R0
@@ -2404,6 +2425,45 @@ SoundTone:
 20$:	mov	#200, @#177716
 	sob	R3, 10$
 99$:	return
+	; noise - every 4th frame
+	; R5 = NoiseAddr
+100$:	bit	#^B11, FrameCount
+	bne	99$
+	; frame cycle
+	mov	#100, R1
+110$:
+NoiseTone =: .+2
+	add	#100000, #000000
+	bcc	120$
+	inc	R5
+120$:	movb	(R5), R0
+	bic	#^B1111111100111111, R0
+	bis	#^B0000000010000000, R0
+	mov	R0, @#177716
+	sob	R1, 110$
+	; decrease tone
+	sub	#6000, NoiseTone
+	; decrease length
+NoiseLen =: .+2
+	dec	#000000
+	bpl	190$
+	clr	R5
+190$:	mov	R5, NoiseAddr
+	return
+
+
+; start noise
+SetNoise:
+	; noise addr
+	mov	#3000, (PC)+
+NoiseAddr:	.word	0
+	; noise tone
+	mov	#100000, NoiseTone
+	clr	NoiseTone+2
+	; noise length (1 sec ~ 50. frames, but we are playing every 4th)
+	mov	#4, NoiseLen
+	return
+
 
 
 ; ZX0 v2.2 standart unpacker
