@@ -67,6 +67,7 @@ Stop:	; stop key goes here
 	tst	@#177662			; read keyboard reg just in case
 
 	; go to main game cycle
+	clr	K2740+2				; clear pause state
 	clr	CurrentMode
 	br	MainCycle
 
@@ -335,8 +336,18 @@ VsyInt:	mov	#20, @#177712
 	rti
 
 
+; pause 
+Kbd274:	tst	@#177662
+	cmp	CurrentMode, #3
+	blo	K2741
+	cmp	CurrentMode, #5
+	bhi	K2741
+K2740:	com	#000000
+	bne .
+	cmp (SP)+, (SP)+
+K2741:	rti
+
 ; keyboard simple
-Kbd274:
 KbdInt:	mov	R0, -(SP)
 	mov	R1, -(SP)
 	mov	@#177662, R0
