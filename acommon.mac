@@ -54,11 +54,11 @@ C_KEY_RIGHT	=: 31
 C_KEY_SPACE	=: 40
 
 ; joystick default bits
-P_KEY_UP	=: 001
-P_KEY_RIGHT	=: 002
-P_KEY_DOWN	=: 004
-P_KEY_LEFT	=: 010
-P_KEY_FIRE	=: 060 ; 2 buttons 'fire' (40) and 'key A' (20)
+C_JOY_UP	=: 001
+C_JOY_RIGHT	=: 002
+C_JOY_DOWN	=: 004
+C_JOY_LEFT	=: 010
+C_JOY_FIRE	=: 060 				; 2 buttons 'fire' (40) and 'key A' (20)
 
 ; //////////////////////////////////////////////////////////////////////////////
 ; VI53 in Menestrel

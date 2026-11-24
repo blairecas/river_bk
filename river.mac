@@ -184,10 +184,9 @@ MainMenuInit:
 
 ; menu (wait key)
 MainMenu:
-	clr	PpuKeys
-	clr	UsedKeys
-10$:	call	RememberKeys
-	bit	#P_KEY_FIRE, UsedKeys
+	clr	JoyCur
+10$:	call	Joystick
+	bit	JoyFire, JoyCur
 	bne	90$
 	mov	KeyCur, R0
 	beq	10$
@@ -236,8 +235,7 @@ DebugOn =: .+2
 	bne	10$
 	jmp	Exit
 90$:	; space - start game
-	clr	PpuKeys
-	clr	UsedKeys
+	clr	JoyCur
 	inc	CurrentMode
 	return
 
@@ -271,12 +269,11 @@ MainScrollInto:
 
 ; wait for game key press
 MainWaitGame:
-	clr	UsedKeys
-10$:	call	RememberKeys
-	tst	UsedKeys
+	clr	JoyCur
+10$:	call	Joystick
+	tst	JoyCur
 	beq	10$
-	clr	UsedKeys
-	clr	PpuKeys
+	clr	JoyCur
 	inc	CurrentMode
 	return
 
@@ -293,7 +290,7 @@ MainGame:
 	call	ProcObjects			; process objects moving etc.
 	call	PlaneColGnd			; check plane collision with ground
 	call	DrawPlane			; draw plane
-	call	RememberKeys			; remember keys pressed at this point
+	call	Joystick			; remember keys pressed at this point
 	call	PlaneKeys			; process plane keys
 	call	ProcMissile			; process missile
 	call	Rotate				; lines rotation
@@ -336,61 +333,58 @@ VsyInt:	mov	#20, @#177712
 	rti
 
 
-; pause 
-Kbd274:	tst	@#177662
-	cmp	CurrentMode, #3
+; pause (func keys interrupt)
+Kbd274:	tst	@#177662			; read kbd buffer
+	cmp	CurrentMode, #3			; are we in a game mode?
 	blo	K2741
-	cmp	CurrentMode, #5
+	cmp	CurrentMode, #5			; same as above
 	bhi	K2741
 K2740:	com	#000000
 	bne .
-	cmp (SP)+, (SP)+
+	cmp	(SP)+, (SP)+
 K2741:	rti
+
 
 ; keyboard simple
 KbdInt:	mov	R0, -(SP)
 	mov	R1, -(SP)
 	mov	@#177662, R0
 	mov	R0, (PC)+
-KeyCur:	.word	0
-	mov	#KeyToPpu, R1
+KeyCur:	.word	000000
+	mov	#KeyToJoy, R1
 10$:	cmp	R0, (R1)+
 	bne	20$
-	bis	(R1), PpuKeys
+	bis	@(R1)+, JoyCur
+KeyChange =: .+2
+	inc	#000000
 	br	90$
 20$:	tst	(R1)+
-	cmp	R1, #KeyToPpuEnd
-	bne	10$
+	cmp	R1, #KeyToJoyEnd
+	blo	10$
 90$:	mov	(SP)+, R1
 	mov	(SP)+, R0
 	rti
 
 
-; remember current keys + joy for later use
-RememberKeys:
-	clr	(PC)+
-UsedKeys:	.word	0
-	; joy
-	mov	@#177714, R0			; get joy bits
-	bic	(PC)+, R0			; clear bad ones
-JoyBadBits:	.word	0
-	; if we redefined joy bits - set them 
-	clr	R2
-	mov	#JoyReTable, R1
-02$:	bit	R0, (R1)+
-	beq	04$
-	bis	(R1), R2
-04$:	tst	(R1)+
-	cmp	R1, #JoyReTableEnd
-	blo	02$
-	bis	R2, UsedKeys
-10$:	; keys
+; joystick and keyboard procedure
+Joystick:
+	; check keys change	
+	tst	KeyChange
+	beq	10$
 	bit	#100, @#177716			; any key pressed?
-	beq	20$				; yes
-PpuKeys =: .+2
-	clr	#000000
-20$:	bis	PpuKeys, UsedKeys
-	return
+	beq	10$				; yes
+	clr	JoyCur
+	clr	KeyChange
+10$:	; check joystick change
+	mov	@#177714, R0
+JoyBadBits =: .+2
+	bic	#000000, R0
+20$:	cmp	R0, #000000
+	beq	99$
+JoyCur =: .+2
+	mov	R0, #000000
+	mov	R0, 20$+2
+99$:	return
 
 
 ; wait for vsync
@@ -456,12 +450,12 @@ FirstLineAddr:	.word	0
 	cmp	CurrentMode, #C_MODE_GAME	; speed up/down can be used only inside main game cycle
 	bne	RotateOne
 	; check up/down keys (priority to down)
-	bit	#P_KEY_DOWN, UsedKeys
+	bit	JoyDown, JoyCur
 	beq	10$
 	bit	#1, FrameCount
 	beq	RotateOne
 	return
-10$:	bit	#P_KEY_UP, UsedKeys
+10$:	bit	JoyUp, JoyCur
 	beq	RotateOne
 	call	RotateOne
 
@@ -1744,7 +1738,7 @@ PlaneKeys:
 	tst	PlaneStatus			; plane is crashing - don't process keys
 	bne	99$
 	; key shift - fire missile
-	bit	#P_KEY_FIRE, UsedKeys
+	bit	JoyFire, JoyCur
 	beq	20$
 	tst	MissileX			; test for missile already present
 	bne	20$
@@ -1758,7 +1752,7 @@ PlaneKeys:
 	; firing sound
 	; TODO: make sound
 20$:	; right
-	bit	#P_KEY_RIGHT, UsedKeys
+	bit	JoyRight, JoyCur
 	beq	30$
 	mov	#WSPT02, PlaneTable		; plane sprites table right
 	add	PlaneVel, PlaneX
@@ -1767,7 +1761,7 @@ PlaneKeys:
 	mov	#255.-16.*400, PlaneX
 	br	PlaneVelInc
 30$:	; left
-	bit	#P_KEY_LEFT, UsedKeys
+	bit	JoyLeft, JoyCur
 	beq	40$
 	mov	#WSPT01, PlaneTable		; plane sprites table left
 	sub	PlaneVel, PlaneX
@@ -2210,7 +2204,7 @@ JoySetup:
 	; for double press detection
 JoyTempDD =: .+2
 	clr	#000000
-	mov	#JoyReTable, R5
+	mov	#JoyTable, R5
 	mov	#5, R4
 10$:	call	Print
 	call	SetJoyKey
@@ -2232,7 +2226,7 @@ SetJoyKey:
 	bis	R1, R2
 	cmp	JoyTempDD, R2
 	beq	10$
-	; update JoyReTable
+	; update JoyTable
 	mov	R1, (R5)+
 	; wait for release
 20$:	bit	#100, @#177716
@@ -2244,7 +2238,7 @@ SetJoyKey:
 	tst	(R5)+
 	return
 90$:	; restore defaults
-	mov	#JoyReTableEnd, R5
+	mov	#JoyTableEnd, R5
 	mov	#5, R3
 	mov	-(R5), -(R5)
 	sob	R3, .-2
@@ -2282,20 +2276,19 @@ TimerLineSet =: .+2
 	; current timer
 	mov	@#177710, R5
 	; keys
-	call	RememberKeys
+	call	Joystick
 	mov	#TKeysAdj, R4
 	mov	#4, R3
-110$:	bitb	(R4)+, UsedKeys
+110$:	bit	@(R4)+, JoyCur
 	beq	120$
-	clr	PpuKeys
-	clr	UsedKeys
-	movb	(R4), R0
+	mov	(R4), R0
 	add	R0, TimerLineSet
 	call	200$
 	br	100$
 120$:	inc	R4
+	inc	R4
 	sob	R3, 110$
-	bit	#P_KEY_FIRE, UsedKeys
+	bit	JoyFire, JoyCur
 	beq	100$
 	sub	#C_TIMER_ADJ, R5
 	bgt	130$
@@ -2371,7 +2364,7 @@ TimerLineSet =: .+2
 	sob	R2, 410$
 	return
 
-TKeysAdj:	.byte	P_KEY_LEFT, -4, P_KEY_RIGHT, 4, P_KEY_UP, -20, P_KEY_DOWN, 20
+TKeysAdj:	.word	JoyLeft, -4, JoyRight, 4, JoyUp, -20, JoyDown, 20
 
 
 ; just blue line
@@ -2566,19 +2559,22 @@ bBlEnd2:	.byte	0			; .. int part
 wBlDiff1:	.word	0			; (start1 - end1) / 32.
 wBlDiff2:	.word	0			; (start2 - end2) / 32.
 
-KeyToPpu:	.word	C_KEY_LEFT,  P_KEY_LEFT
-		.word	C_KEY_RIGHT, P_KEY_RIGHT
-		.word	C_KEY_UP,    P_KEY_UP
-		.word	C_KEY_DOWN,  P_KEY_DOWN
-		.word	C_KEY_SPACE, P_KEY_FIRE
-KeyToPpuEnd:
+; joystick bits (maybe redefined)
+JoyTable:
+JoyUp:		.word	C_JOY_UP,	C_JOY_UP
+JoyRight:	.word	C_JOY_RIGHT,	C_JOY_RIGHT
+JoyDown:	.word	C_JOY_DOWN,	C_JOY_DOWN
+JoyLeft:	.word	C_JOY_LEFT,	C_JOY_LEFT
+JoyFire:	.word	C_JOY_FIRE,	C_JOY_FIRE
+JoyTableEnd:
 
-JoyReTable:	.word	P_KEY_UP,    P_KEY_UP
-JoyReTableR:	.word	P_KEY_RIGHT, P_KEY_RIGHT
-JoyReTableD:	.word	P_KEY_DOWN,  P_KEY_DOWN
-JoyReTableL:	.word	P_KEY_LEFT,  P_KEY_LEFT
-JoyReTableF:	.word	P_KEY_FIRE,  P_KEY_FIRE
-JoyReTableEnd:
+; keyboard -> joy bits mapping
+KeyToJoy:	.word	C_KEY_UP,    JoyUp
+		.word	C_KEY_RIGHT, JoyRight
+		.word	C_KEY_DOWN,  JoyDown
+		.word	C_KEY_LEFT,  JoyLeft
+		.word	C_KEY_SPACE, JoyFire
+KeyToJoyEnd:
 
 MsgJoy000:	.asciz	<2>"JOYSTICK SETUP"
 MsgJoy001:	.asciz	<1>"PRESS ANY KEY TO USE DEFAULTS"
