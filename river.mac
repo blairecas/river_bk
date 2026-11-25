@@ -40,7 +40,11 @@ Start:	mov	#1000, SP
 TimerCycle =: .+2
 	mov	#740, @#177706
 	mov	#20, @#177712			; start timer, max speed
+
 	clr	@#177714			; turn off mouse???
+	clr	R0				; put joystick bad port bits
+	bis	@#177714, JoyBadBits
+	sob	R0, .-6
 
 Stop:	; stop key goes here 
 	; (!) mutable SP addr
@@ -375,6 +379,8 @@ Joystick:
 	return
 100$:	; check joystick change
 	mov	@#177714, R0
+JoyBadBits =: .+2
+	bic	#000000, R0
 110$:	cmp	R0, #000000
 	beq	199$
 	mov	R0, 110$+2
@@ -2220,7 +2226,8 @@ SetJoyKey:
 	beq	10$
 	mov	R2, R3
 	; update JoyTable
-	mov	R1, (R5)+
+	mov	R1, (R5)
+	bic	JoyBadBits, (R5)+
 	; wait for release
 20$:	cmp	@#177714, R1
 	beq	20$
