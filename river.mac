@@ -40,13 +40,7 @@ Start:	mov	#1000, SP
 TimerCycle =: .+2
 	mov	#740, @#177706
 	mov	#20, @#177712			; start timer, max speed
-
-	; set joystick bad bits
-	clr	@#177714			; turn off mouse?
-	clr	JoyBadBits
-	clr	R0
-	bis	@#177714, JoyBadBits
-	sob	R0, .-6
+	clr	@#177714			; turn off mouse???
 
 Stop:	; stop key goes here 
 	; (!) mutable SP addr
@@ -185,6 +179,7 @@ MainMenuInit:
 ; menu (wait key)
 MainMenu:
 	clr	JoyCur
+	clr	KeyCur
 10$:	call	Joystick
 	bit	JoyFire, JoyCur
 	bne	90$
@@ -232,8 +227,11 @@ DebugOn =: .+2
 	return
 50$:	; 0 - exit
 	cmp	R0, #'0
-	bne	10$
+	bne	60$
 	jmp	Exit
+60$:	; space
+	cmp	R0, #40
+	bne	10$
 90$:	; space - start game
 	clr	JoyCur
 	inc	CurrentMode
@@ -333,7 +331,7 @@ VsyInt:	mov	#20, @#177712
 	rti
 
 
-; pause (func keys interrupt)
+; func keys interrupt - pause
 Kbd274:	tst	@#177662			; read kbd buffer
 	cmp	CurrentMode, #3			; are we in a game mode?
 	blo	K2741
@@ -345,46 +343,44 @@ K2740:	com	#000000
 K2741:	rti
 
 
-; keyboard simple
-KbdInt:	mov	R0, -(SP)
-	mov	R1, -(SP)
-	mov	@#177662, R0
-	mov	R0, (PC)+
-KeyCur:	.word	000000
-	mov	#KeyToJoy, R1
-10$:	cmp	R0, (R1)+
-	bne	20$
-	bis	@(R1)+, JoyCur
-KeyChange =: .+2
-	inc	#000000
-	br	90$
-20$:	tst	(R1)+
-	cmp	R1, #KeyToJoyEnd
-	blo	10$
-90$:	mov	(SP)+, R1
-	mov	(SP)+, R0
+; keyboard interrupt
+KbdInt:	mov	@#177662, (PC)+
+KeyCur:	.word	0
 	rti
 
 
 ; joystick and keyboard procedure
 Joystick:
-	; check keys change	
-	tst	KeyChange
-	beq	10$
-	bit	#100, @#177716			; any key pressed?
-	beq	10$				; yes
+	; check keys change
+	mov	@#177716, R0
+	bic	#^C100, R0
+10$:	cmp	R0, #000000			; was kdb bit changed?
+	beq	100$				; no
+	mov	R0, 10$+2
+	bit	#100, R0			; check it was pressed or released
+	beq	20$				; pressed
+	; key was released
 	clr	JoyCur
-	clr	KeyChange
-10$:	; check joystick change
+	return
+20$:	; key was pressed
+	mov	@#177662, R0			; key code
+	mov	#KeyToJoy, R1
+30$:	cmp	R0, (R1)+
+	bne	40$
+	bis	@(R1)+, JoyCur
+	return
+40$:	tst	(R1)+
+	cmp	R1, #KeyToJoyEnd
+	blo	30$
+	return
+100$:	; check joystick change
 	mov	@#177714, R0
-JoyBadBits =: .+2
-	bic	#000000, R0
-20$:	cmp	R0, #000000
-	beq	99$
+110$:	cmp	R0, #000000
+	beq	199$
+	mov	R0, 110$+2
 JoyCur =: .+2
 	mov	R0, #000000
-	mov	R0, 20$+2
-99$:	return
+199$:	return
 
 
 ; wait for vsync
@@ -2201,9 +2197,8 @@ JoySetup:
 	call	Print
 	call	Print
 	add	#10.*C_SCRWID, PrintVaddr
-	; for double press detection
-JoyTempDD =: .+2
-	clr	#000000
+	mov	@#177714, R2			; current summ of joy bits
+	mov	R2, R3				; total summ of joy bits
 	mov	#JoyTable, R5
 	mov	#5, R4
 10$:	call	Print
@@ -2215,26 +2210,20 @@ JoyTempDD =: .+2
 ; R5 - where to put it
 ; return R5 - where to put next
 SetJoyKey:
-	mov	JoyTempDD, R2
-	; wait for press
-10$:	bit	#100, @#177716
-	beq	90$
+	clr	KeyCur
+10$:	; wait for press
+	tst	KeyCur				; check for keyboard int
+	bne	90$				; it was - restore defaults
 	mov	@#177714, R1
-	bic	JoyBadBits, R1
-	beq	10$
-	; check for double press
 	bis	R1, R2
-	cmp	JoyTempDD, R2
+	cmp	R2, R3
 	beq	10$
+	mov	R2, R3
 	; update JoyTable
 	mov	R1, (R5)+
 	; wait for release
-20$:	bit	#100, @#177716
-	beq	90$
-	mov	@#177714, R1
-	bic	JoyBadBits, R1
-	bne	20$
-	mov	R2, JoyTempDD
+20$:	cmp	@#177714, R1
+	beq	20$
 	tst	(R5)+
 	return
 90$:	; restore defaults
@@ -2242,7 +2231,6 @@ SetJoyKey:
 	mov	#5, R3
 	mov	-(R5), -(R5)
 	sob	R3, .-2
-	clr	KeyCur
 	tst	(SP)+				; remove call
 	return					; return from routine above
 
