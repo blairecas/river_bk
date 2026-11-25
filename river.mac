@@ -2181,7 +2181,7 @@ PrintOctal:
 	return	 
 
 
-; setup joy redefine table (if user want so, doing that only once)
+; setup joy bits table
 JoySetup:
 	call	ClearScreen
 	mov	#10.*C_SCRWID+2+C_VADDR, PrintVaddr
@@ -2192,40 +2192,34 @@ JoySetup:
 	mov	@#177714, R2			; current summ of joy bits
 	mov	R2, R3				; total summ of joy bits
 	mov	#JoyTable, R5
-	mov	#5, R4
-10$:	call	Print
-	call	SetJoyKey
-	sob	R4, 10$
-	return
-
-; wait for joy input (or keypress)
-; R5 - where to put it
-; return R5 - where to put next
-SetJoyKey:
+10$:	; setup one joy key
+	call	Print
 	clr	KeyCur
-10$:	; wait for press
+20$:	; wait for press
 	tst	KeyCur				; check for keyboard int
 	bne	90$				; it was - restore defaults
 	mov	@#177714, R1
 	bis	R1, R2
 	cmp	R2, R3
-	beq	10$
+	beq	20$
 	mov	R2, R3
 	; update JoyTable
 	mov	R1, (R5)
 	bic	JoyBadBits, (R5)+
 	; wait for release
-20$:	cmp	@#177714, R1
-	beq	20$
+30$:	cmp	@#177714, R1
+	beq	30$
 	tst	(R5)+
+	; cycle joy keys
+	cmp	R5, #JoyTableEnd
+	blo	10$
 	return
-90$:	; restore defaults
-	mov	#JoyTableEnd, R5
+; restore defaults
+90$:	mov	#JoyTableEnd, R5
 	mov	#5, R3
 	mov	-(R5), -(R5)
 	sob	R3, .-2
-	tst	(SP)+				; remove call
-	return					; return from routine above
+	return
 
 
 ; setup vsync timer
