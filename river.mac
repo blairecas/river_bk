@@ -182,7 +182,6 @@ MainMenuInit:
 
 ; menu (wait key)
 MainMenu:
-	clr	JoyCur
 	clr	KeyCur
 10$:	call	Joystick
 	bit	JoyFire, JoyCur
@@ -190,10 +189,10 @@ MainMenu:
 	mov	KeyCur, R0
 	beq	10$
 	clr	KeyCur
+	call	SoundSimple			; it will keep R0
 	; 1 - setup joystick
 	cmp	R0, #'1
 	bne	20$
-	call	SoundSimple
 	call	JoySetup
 18$:	clr	CurrentMode
 	return
@@ -202,13 +201,11 @@ MainMenu:
 	bne	30$
 	tst	@#100				; check for BK0010
 	bne	10$
-	call	SoundSimple
 	call	SetupTimer
 	br	18$
 30$:	; 3 - sound on/off
 	cmp	R0, #'3
 	bne	40$
-	call	SoundSimple
 	mov	#C_MENU_Y+21.*C_SCRWID+34.+C_VADDR, PrintVaddr
 	mov	#MsgOn, R0
 SoundOn =: .+2
@@ -220,7 +217,6 @@ SoundOn =: .+2
 40$:	; 4 - debug on/off
 	cmp	R0, #'4
 	bne	50$
-	call	SoundSimple
 	mov	#C_MENU_Y+32.*C_SCRWID+34.+C_VADDR, PrintVaddr
 	mov	#MsgOn, R0
 DebugOn =: .+2
@@ -237,7 +233,6 @@ DebugOn =: .+2
 	cmp	R0, #40
 	bne	10$
 90$:	; space - start game
-	clr	JoyCur
 	inc	CurrentMode
 	return
 
@@ -271,11 +266,9 @@ MainScrollInto:
 
 ; wait for game key press
 MainWaitGame:
-	clr	JoyCur
-10$:	call	Joystick
+	call	Joystick
 	tst	JoyCur
-	beq	10$
-	clr	JoyCur
+	beq	MainWaitGame
 	inc	CurrentMode
 	return
 
