@@ -346,25 +346,75 @@ KeyCur:	.word	0
 	rti
 
 
+; keyboard -> joy bits mapping
+KeyToJoy:	.word	C_KEY_UP, C_KEY_RIGHT, C_KEY_DOWN, C_KEY_LEFT, C_KEY_SPACE
+; current joy mapping
+JoyUp:		.word	C_JOY_UP
+JoyRight:	.word	C_JOY_RIGHT
+JoyDown:	.word	C_JOY_DOWN
+JoyLeft:	.word	C_JOY_LEFT
+JoyFire:	.word	C_JOY_FIRE
+; defaults
+JoyDefs:	.word	C_JOY_UP, C_JOY_RIGHT, C_JOY_DOWN, C_JOY_LEFT, C_JOY_FIRE
+
 ; joystick and keyboard procedure
+; result: JoyCur <- from either keyboard or joystick
 Joystick:
-	; keyboard
+	; check keyboard
 	bit	#100, @#177716			; are we pressing any key?
-	bne	50$				; no, go to joystick
+	bne	20$				; no, go to joystick
 	mov	#KeyToJoy, R0
 10$:	cmp	@#177662, (R0)+
-	beq	20$
-	tst	(R0)+
-	cmp	R0, #KeyToJoyEnd
+	beq	30$
+	cmp	R0, #KeyToJoy+12		; cycle 5 times
 	blo	10$
-	return
-20$:	mov	@(R0), JoyCur
-	return	
-50$:	; joystick
+20$:	; joystick
 	mov	@#177714, JoyCur
 JoyBadBits =: .+2
 JoyCur =: .+4
 	bic	#000000, #000000
+	return
+30$:	; key -> joy
+	mov	JoyUp-KeyToJoy-2(R0), JoyCur
+	return
+
+; setup joy bits table
+JoySetup:
+	call	ClearScreen
+	mov	#10.*C_SCRWID+2+C_VADDR, PrintVaddr
+	mov	#MsgJoy000, R0
+	call	Print
+	call	Print
+	add	#10.*C_SCRWID, PrintVaddr
+	mov	@#177714, R2			; current summ of joy bits
+	mov	R2, R3				; total summ of joy bits
+	mov	#JoyUp, R5
+10$:	; setup one joy key
+	call	Print
+	clr	KeyCur
+20$:	; wait for press
+	tst	KeyCur				; check for keyboard int
+	bne	90$				; it was - restore defaults
+	mov	@#177714, R1
+	bis	R1, R2
+	cmp	R2, R3
+	beq	20$
+	mov	R2, R3
+	; update 
+	mov	R1, (R5)
+	bic	JoyBadBits, (R5)+
+	; wait for release
+30$:	cmp	@#177714, R1
+	beq	30$
+	; cycle joy keys 5 times
+	cmp	R5, #JoyUp+12
+	blo	10$
+	return
+; restore defaults
+90$:	mov	#JoyUp, R5
+	mov	#5, R3
+	mov	JoyDefs-JoyUp(R5), (R5)+
+	sob	R3, .-4
 	return
 
 
@@ -2174,47 +2224,6 @@ PrintOctal:
 	return	 
 
 
-; setup joy bits table
-JoySetup:
-	call	ClearScreen
-	mov	#10.*C_SCRWID+2+C_VADDR, PrintVaddr
-	mov	#MsgJoy000, R0
-	call	Print
-	call	Print
-	add	#10.*C_SCRWID, PrintVaddr
-	mov	@#177714, R2			; current summ of joy bits
-	mov	R2, R3				; total summ of joy bits
-	mov	#JoyTable, R5
-10$:	; setup one joy key
-	call	Print
-	clr	KeyCur
-20$:	; wait for press
-	tst	KeyCur				; check for keyboard int
-	bne	90$				; it was - restore defaults
-	mov	@#177714, R1
-	bis	R1, R2
-	cmp	R2, R3
-	beq	20$
-	mov	R2, R3
-	; update JoyTable
-	mov	R1, (R5)
-	bic	JoyBadBits, (R5)+
-	; wait for release
-30$:	cmp	@#177714, R1
-	beq	30$
-	tst	(R5)+
-	; cycle joy keys
-	cmp	R5, #JoyTableEnd
-	blo	10$
-	return
-; restore defaults
-90$:	mov	#JoyTableEnd, R5
-	mov	#5, R3
-	mov	-(R5), -(R5)
-	sob	R3, .-2
-	return
-
-
 ; setup vsync timer
 SetupTimer:
 	call	ClearScreen
@@ -2526,23 +2535,6 @@ wBlEnd2:	.byte	0			; current block island lower width (float part)
 bBlEnd2:	.byte	0			; .. int part
 wBlDiff1:	.word	0			; (start1 - end1) / 32.
 wBlDiff2:	.word	0			; (start2 - end2) / 32.
-
-; joystick bits, current, default
-JoyTable:
-JoyUp:		.word	C_JOY_UP,	C_JOY_UP
-JoyRight:	.word	C_JOY_RIGHT,	C_JOY_RIGHT
-JoyDown:	.word	C_JOY_DOWN,	C_JOY_DOWN
-JoyLeft:	.word	C_JOY_LEFT,	C_JOY_LEFT
-JoyFire:	.word	C_JOY_FIRE,	C_JOY_FIRE
-JoyTableEnd:
-
-; keyboard -> joy bits mapping
-KeyToJoy:	.word	C_KEY_UP, 	JoyUp
-		.word	C_KEY_RIGHT,	JoyRight
-		.word	C_KEY_DOWN,	JoyDown
-		.word	C_KEY_LEFT, 	JoyLeft
-		.word	C_KEY_SPACE,	JoyFire
-KeyToJoyEnd:
 
 MsgJoy000:	.asciz	<2>"JOYSTICK SETUP"
 MsgJoy001:	.asciz	<1>"PRESS ANY KEY TO USE DEFAULTS"
